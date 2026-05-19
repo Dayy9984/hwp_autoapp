@@ -44,10 +44,8 @@ function App() {
   const [notification, setNotification] = useState<Notification | null>(null)
   const notificationPriorityRef = useRef(0)
   const updateCheckRef = useRef(false)
-  const openAiKeyCheckRef = useRef(false)
   const initialCheckRef = useRef(false)
   const { isAuthenticated } = useAuthStore()
-  const { openaiApiKey, hasHydrated } = useSettingsStore()
   const {
     theme,
     setTheme,
@@ -392,23 +390,9 @@ function App() {
     void checkUpdates()
   }, [isAuthenticated])
 
-  // OpenAI API key check (once after settings hydrate)
-  useEffect(() => {
-    if (!isAuthenticated || !hasHydrated) return
-    if (openAiKeyCheckRef.current) return
-    openAiKeyCheckRef.current = true
-
-    if (openaiApiKey) return
-
-    showNotification({
-      id: 'openai-key-required',
-      type: 'version-update',
-      title: 'OpenAI API 키 필요',
-      content: '개인 API 키가 등록되어야 사용 가능합니다.\n지금 설정에서 키를 등록해 주세요.',
-      actionLabel: '키 등록하기',
-      actionUrl: undefined
-    })
-  }, [isAuthenticated, hasHydrated, openaiApiKey, showNotification])
+  // OpenAI API 키 알림은 제거 — Codex 로그인 시에도 잘못 표시되는 문제,
+  // 그리고 사용자 경험상 불필요한 시작 모달을 없앤다.
+  // (채팅 전송 시점의 ensureOpenAiKey는 유지 — codex 모드는 자동 통과)
 
   // HWP 윈도우 이벤트 리스너 (문서 연결/해제 감지)
   useEffect(() => {

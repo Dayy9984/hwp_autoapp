@@ -92,7 +92,7 @@ export function ChatInput({ folderId }: ChatInputProps = {}) {
     refreshSelectionInfo
   } = useDocumentStore()
   const { openPopover, navigateToView, currentView, theme, openModal } = useUIStore()
-  const { openaiApiKey } = useSettingsStore()
+  const { openaiApiKey, connectionMode } = useSettingsStore()
   const { pending, showToast } = useTrackChangesStore()
   const { getChatFolder } = useFolderStore()
   const { isActive: isProgressActive, currentStage: progressStage } = useProgressStore()
@@ -140,6 +140,8 @@ export function ChatInput({ folderId }: ChatInputProps = {}) {
   }
 
   const ensureOpenAiKey = () => {
+    // Codex(ChatGPT) 모드는 API 키 불필요
+    if (connectionMode === 'codex') return true
     if (openaiApiKey && openaiApiKey.trim()) return true
     const confirmed = window.confirm('OpenAI API 키가 필요합니다. 설정의 모델 및 AI 탭에서 키를 등록할까요?')
     if (confirmed) {

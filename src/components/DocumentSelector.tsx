@@ -13,7 +13,7 @@ export function DocumentSelector({ folderId }: { folderId?: string } = {}) {
   const popoverRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const currentChatId = useChatStore(state => state.currentChatId)
-  const { openaiApiKey } = useSettingsStore()
+  const { openaiApiKey, connectionMode } = useSettingsStore()
   const { openModal } = useUIStore()
 
   const {
@@ -45,6 +45,8 @@ export function DocumentSelector({ folderId }: { folderId?: string } = {}) {
   }
 
   const ensureOpenAiKey = () => {
+    // Codex(ChatGPT) 모드는 API 키 불필요
+    if (connectionMode === 'codex') return true
     if (openaiApiKey && openaiApiKey.trim()) return true
     const confirmed = window.confirm('OpenAI API 키가 필요합니다. 설정의 모델 및 AI 탭에서 키를 등록할까요?')
     if (confirmed) {
