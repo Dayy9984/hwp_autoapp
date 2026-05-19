@@ -377,26 +377,34 @@ class LocalFileReaderService:
         keywords = [p.strip() for p in parts if p.strip() and len(p.strip()) >= 2]
         return keywords if keywords else [query]
 
-    def _extract_matches(self, query: str, text: str,
-                         file_info: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """텍스트에서 쿼리 키워드가 포함된 단락(±CONTEXT_WINDOW 문자) 추출.
+    @staticmethod
+    def _compile_query(query: str) -> "re.Pattern":
+        """쿼리를 정규식 패턴으로 컴파일.
 
-        복합 쿼리('A 및 B')는 개별 키워드로 분리하여 각각 검색.
-        스니펫이 잘린 경우 앞/뒤 잘림 마커를 삽입하여
-        LLM이 read_file로 이어 읽도록 유도한다.
+        AI가 정규식 의도로 보낸 경우(예: '대표자|대표\\s*자') 그대로 사용.
+        컴파일 실패 시 literal(re.escape) 폴백 — 기존 동작 보장.
         """
-        # 먼저 전체 쿼리로 검색 시도
-        matches: List[Dict[str, Any]] = []
+        try:
+            return re.compile(query, re.IGNORECASE)
+        except re.error:
+            return re.compile(re.escape(query), re.IGNORECASE)
+
+    def _collect_pattern_matches(
+        self,
+        pattern: "re.Pattern",
+        query: str,
+        text: str,
+        file_info: Dict[str, Any],
+        matches: List[Dict[str, Any]],
+    ) -> None:
+        """주어진 패턴으로 finditer 매칭하여 matches 리스트에 컨텍스트 스니펫 누적."""
         total_len = len(text)
-        pattern = re.compile(re.escape(query), re.IGNORECASE)
         for m in pattern.finditer(text):
             if len(matches) >= MAX_MATCHES_PER_QUERY:
-                break
+                return
             start = max(0, m.start() - CONTEXT_WINDOW)
             end = min(total_len, m.end() + CONTEXT_WINDOW)
             snippet = text[start:end].strip()
-
-            # 잘림 마커: LLM이 read_file(offset=...)로 이어 읽도록 steering
             prefix = f"[...앞쪽 {start:,}자 생략...]" if start > 0 else ""
             chars_after = total_len - end
             suffix = (
@@ -404,7 +412,6 @@ class LocalFileReaderService:
                 f"read_file(offset={end})로 이어 읽기...]"
             ) if chars_after > 300 else ""
             content = f"{prefix}\n{snippet}\n{suffix}".strip() if (prefix or suffix) else snippet
-
             matches.append({
                 "query": query,
                 "scope": file_info["scope"],
@@ -416,41 +423,41 @@ class LocalFileReaderService:
                 "truncated_before": start > 0,
                 "truncated_after": chars_after > 300,
             })
+
+    def _extract_matches(self, query: str, text: str,
+                         file_info: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """텍스트에서 쿼리 키워드가 포함된 단락(±CONTEXT_WINDOW 문자) 추출.
+
+        검색 전략 (Claude grep 방식):
+        1) 쿼리를 정규식으로 직접 컴파일 시도 (alternation `|`, `\\s*` 등 지원)
+        2) 키워드 분리 후 OR 결합한 단일 패턴으로 한 번에 매칭
+        3) 그래도 0건이면 compact 검색(공백 무시 매칭)으로 폴백
+
+        스니펫이 잘린 경우 앞/뒤 잘림 마커를 삽입하여
+        LLM이 read_file로 이어 읽도록 유도한다.
+        """
+        matches: List[Dict[str, Any]] = []
+
+        # 1) 전체 쿼리를 정규식으로 시도 (정규식 의도 또는 단일 literal)
+        primary = self._compile_query(query)
+        self._collect_pattern_matches(primary, query, text, file_info, matches)
         if matches:
             return matches
-        # 전체 쿼리 매치 실패 → 키워드 분리 후 개별 검색
+
+        # 2) 키워드 분리 후 OR 결합 (Claude의 `(a|b|c)` 패턴)
         keywords = self._split_query_keywords(query)
         if len(keywords) > 1:
-            for kw in keywords:
-                if len(matches) >= MAX_MATCHES_PER_QUERY:
-                    break
-                kw_pattern = re.compile(re.escape(kw), re.IGNORECASE)
-                for m in kw_pattern.finditer(text):
-                    if len(matches) >= MAX_MATCHES_PER_QUERY:
-                        break
-                    start = max(0, m.start() - CONTEXT_WINDOW)
-                    end = min(total_len, m.end() + CONTEXT_WINDOW)
-                    snippet = text[start:end].strip()
-                    prefix = f"[...앞쪽 {start:,}자 생략...]" if start > 0 else ""
-                    chars_after = total_len - end
-                    suffix = (
-                        f"[...뒤쪽 {chars_after:,}자 생략 — "
-                        f"read_file(offset={end})로 이어 읽기...]"
-                    ) if chars_after > 300 else ""
-                    content = f"{prefix}\n{snippet}\n{suffix}".strip() if (prefix or suffix) else snippet
-                    matches.append({
-                        "query": query,
-                        "scope": file_info["scope"],
-                        "content": content,
-                        "source": file_info["display_name"],
-                        "start_char": start,
-                        "end_char": end,
-                        "total_chars": total_len,
-                        "truncated_before": start > 0,
-                        "truncated_after": chars_after > 300,
-                    })
+            alt = "|".join(re.escape(kw) for kw in keywords)
+            try:
+                or_pattern = re.compile(alt, re.IGNORECASE)
+            except re.error:
+                or_pattern = None
+            if or_pattern is not None:
+                self._collect_pattern_matches(or_pattern, query, text, file_info, matches)
             if matches:
                 return matches
+
+        # 3) compact 검색 폴백 (공백 제거 후 매칭 — 표/줄바꿈으로 단어가 쪼개진 경우)
         return self._extract_matches_compact(query, text, file_info)
 
     # ------------------------------------------------------------------

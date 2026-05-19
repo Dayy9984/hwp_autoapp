@@ -156,22 +156,50 @@ def _extract_context_tags(prompt: str) -> Tuple[str, str]:
     return context_sections, user_request_text
 
 
-def _build_search_rag_tool() -> List[Dict[str, Any]]:
-    """search_rag function tool 정의 (v7.3.2: 배치 검색 지원)"""
-    # Responses API는 Chat Completions API와 다른 형식 사용
-    # - 'function' 중첩 없음
-    # - name, description, parameters가 최상위 레벨
-    return [{
-        "type": "function",
-        "name": "search_rag",
-        "description": (
-            "업로드된 참조 파일에서 정보를 검색합니다. 참조 파일이 있으면 추론과 같은 응답에서 동시에 호출하세요. "
+def _build_search_rag_tool(codex_mode: bool = False) -> List[Dict[str, Any]]:
+    """search_rag function tool 정의 (v7.3.2: 배치 검색 지원).
+
+    codex_mode=True면 grep(키워드 정확 매칭) 안내,
+    codex_mode=False면 임베딩(의미 검색) 안내로 description을 분기한다.
+    """
+    if codex_mode:
+        # Codex 모드: 로컬 grep — 정확한 키워드/정규식 매칭
+        description = (
+            "업로드된 참조 파일에서 정보를 검색합니다 (grep 방식 — 텍스트 정확 매칭).\n"
+            "임베딩이 아니므로 **단일 단어/명사/숫자/고유명사**로 짧고 구체적으로 검색하세요.\n"
+            "필요시 정규식 `대표자|대표\\s*자` 같은 alternation도 사용 가능합니다.\n"
+            "\n"
+            "올바른 예: ['업체명', '대표자', '사업자등록번호', '매출액', '2025년']\n"
+            "잘못된 예: ['업체명 대표자 사업자등록번호'] ← 공백 묶음 (전체가 한 문자열로 검색됨)\n"
+            "잘못된 예: ['회사 기본 정보를 알려주세요'] ← 자연어 문장 (매칭 실패)\n"
+            "\n"
+            "결과가 0건이면 동의어/유사어로 reformulate하여 재호출. "
+            "file_name 필터가 너무 좁으면 해제. "
+            "최소 2회 재시도 후에도 빈 결과일 때만 사용자에게 안내."
+        )
+        queries_desc = (
+            "검색 키워드 배열. **각 원소는 단일 단어 또는 짧은 정규식**으로. "
+            "예: ['업체명', '대표자', '매출액', '2025년']. "
+            "여러 단어를 공백으로 묶으면 정확한 문자열만 매칭되어 결과가 거의 안 나옵니다."
+        )
+    else:
+        # API 모드: OpenAI Vector Store (임베딩 의미 검색) — 자연어 구문 OK
+        description = (
+            "업로드된 참조 파일에서 정보를 검색합니다 (임베딩 의미 검색). "
+            "자연어 구문으로 검색하면 유사한 의미의 단락을 자동으로 찾아줍니다. "
+            "참조 파일이 있으면 추론과 같은 응답에서 동시에 호출하세요. "
             "검색 결과는 시스템이 자동으로 전달합니다. "
             "**중요**: 결과가 0건이거나 빈약하면 단일 호출로 결론짓지 말 것. "
             "동의어/유사어로 쿼리를 reformulate하여 search_rag를 재호출하라. "
             "file_name 필터가 너무 좁으면 해제하고 재시도. "
             "최소 2회 재시도 후에도 빈 결과일 때만 사용자에게 안내."
-        ),
+        )
+        queries_desc = "검색 키워드 배열. 예: ['팀원 정보', '사업 목표', '추진 전략']"
+
+    return [{
+        "type": "function",
+        "name": "search_rag",
+        "description": description,
         "parameters": {
             "type": "object",
             "properties": {
@@ -184,7 +212,7 @@ def _build_search_rag_tool() -> List[Dict[str, Any]]:
                     "items": {"type": "string"},
                     "minItems": 1,
                     "maxItems": 10,
-                    "description": "검색 키워드 배열. 예: ['팀원 정보', '사업 목표', '추진 전략']"
+                    "description": queries_desc
                 }
             },
             "required": ["queries"]
@@ -1044,7 +1072,7 @@ class OpenAIStreamingClient:
                 batch_tools = build_v711_batch_tools()
                 if _has_rag:
                     # analysis phase: search_rag + thinking 만 (execute_edits 없음)
-                    api_params["tools"] = _build_search_rag_tool() + build_v711_analysis_tools()
+                    api_params["tools"] = _build_search_rag_tool(codex_mode=self.codex_mode) + build_v711_analysis_tools()
                     api_params["tool_choice"] = "required"
                     debug(f"[RAG/analysis] tools=[search_rag, thinking], tool_choice=required")
                 else:
@@ -1052,7 +1080,7 @@ class OpenAIStreamingClient:
                     api_params["tool_choice"] = "required"
                     debug("[TOOL/full] v7.11 batch tools, tool_choice=required")
             elif enable_file_search and _rag_context.get("project_id"):
-                api_params["tools"] = _build_search_rag_tool()
+                api_params["tools"] = _build_search_rag_tool(codex_mode=self.codex_mode)
                 api_params["tool_choice"] = "auto"
                 debug("[RAG] search_rag tool enabled")
             
@@ -1471,8 +1499,8 @@ class OpenAIStreamingClient:
                         {"type": "message", "role": "user", "content": user_message}
                     ]
 
-                    # 분석 도구 목록: Codex는 read_file 추가
-                    _analysis_tool_defs = _build_search_rag_tool() + build_v711_analysis_tools()
+                    # 분석 도구 목록: Codex는 read_file 추가 + description은 grep 안내
+                    _analysis_tool_defs = _build_search_rag_tool(codex_mode=_is_codex) + build_v711_analysis_tools()
                     if _is_codex:
                         _analysis_tool_defs += _build_read_file_tool()
 

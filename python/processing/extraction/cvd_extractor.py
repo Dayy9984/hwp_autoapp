@@ -998,7 +998,13 @@ class CVDExtractor:
             return text in {"1", "true", "on", "yes", "t"}
 
     def _extract_diagonal_flags_from_borderfill(self, borderfill_elem: ET.Element) -> List[str]:
-        """대각선/사선 계열 플래그 추출 (구버전 HWPML 호환)."""
+        """대각선/사선 계열 플래그 추출.
+
+        HWPML 표준: 실제 사선 유무는 부모 BORDERFILL 의 직접 속성
+        (Slash, BackSlash, CounterSlash, CounterBackSlash, CrookedSlash 등)으로 결정한다.
+        `<DIAGONAL Type="Solid" Width="0.1mm"/>` 같은 자식 태그는 사선 스타일 정의일 뿐
+        실제로 그려질지 여부를 의미하지 않으므로 자식 태그/태그명 기반 판정은 사용하지 않는다.
+        """
         if borderfill_elem is None:
             return []
 
@@ -1012,21 +1018,14 @@ class CVDExtractor:
         }
 
         flags: set[str] = set()
-        for em in borderfill_elem.iter():
-            tag_lower = self._strip_ns(em.tag).lower()
-            attr_map = {str(k).lower(): str(v) for k, v in getattr(em, "attrib", {}).items()}
-
+        # 부모 BORDERFILL 의 직접 속성만 검사 (자식 태그는 스타일 정의이므로 무시)
+        parent_attrs = {
+            str(k).lower(): str(v) for k, v in getattr(borderfill_elem, "attrib", {}).items()
+        }
+        for key, value in parent_attrs.items():
             for token, flag_name in token_map.items():
-                if token in tag_lower and (
-                    self._border_elem_has_line(em)
-                    or any(self._is_truthy_diagonal_attr(v) for v in attr_map.values())
-                ):
+                if token in key and self._is_truthy_diagonal_attr(value):
                     flags.add(flag_name)
-
-            for key, value in attr_map.items():
-                for token, flag_name in token_map.items():
-                    if token in key and self._is_truthy_diagonal_attr(value):
-                        flags.add(flag_name)
 
         return sorted(flags)
 
