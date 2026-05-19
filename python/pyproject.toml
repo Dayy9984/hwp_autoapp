@@ -1,0 +1,53 @@
+[project]
+name = "inserty-note-python"
+version = "0.1.8"
+description = "Inserty Python Processor - HWP/Word/Excel document automation with RAG-Anything"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    # Core dependencies
+    "pyhwpx>=1.6.6",
+    "pywin32>=306",
+    "openai>=1.0.0",
+    "python-dotenv>=1.0.0",
+    "pyinstaller>=6.0.0",
+    "numpy<2.0.0",
+    "psutil>=5.9.0",
+    # RAG-Anything (MIT License) - multimodal RAG
+    "raganything>=0.1.0",
+    # PDF parsing (lightweight)
+    "PyPDF2>=3.0.0",
+    "pdf2image>=1.17.0",
+    "pytesseract>=0.3.10",
+    "pypdfium2>=4.30.0",
+    # Office file support (LibreOffice 대체)
+    "python-docx>=1.0.0",
+    "openpyxl>=3.1.0",
+    "python-pptx>=0.6.23",
+    # Image support for RAG
+    "pillow>=10.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "nuitka>=2.0",
+    "pyarmor>=8.0",
+    "ordered-set>=4.0",
+]
+
+
+[tool.ruff]
+# TASK-003: SelectAll/Delete 금지 규칙
+# Phase 1 (Delta 전환) 전까지는 경고만, 이후에는 에러로 처리
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "C90", "I", "N", "UP", "B"]
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+# 기존 코드는 임시 허용 (Phase 1 완료 후 제거)
+"hwp/adapter.py" = ["B001"]  # SelectAll/Delete 임시 허용
+
+[tool.pytest.ini_options]
+# 수동 실행용 통합 스크립트 (pytest fixture 미사용)는 collection 제외
+addopts = "--ignore=tests/test_local_file_reader.py"

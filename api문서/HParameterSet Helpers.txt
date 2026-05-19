@@ -1,0 +1,140 @@
+HParameterSet Helpers
+pyhwpx.param_helpers.ParamHelpers
+파라미터 헬퍼메서드 : 별도의 동작은 하지 않고, 파라미터 변환, 연산 등을 돕는다.
+
+HeadType(heading_type)
+문단 종류를 결정할 때 사용하는 헬퍼함수
+
+현재 문단의 머리에 '개요 번호'나 '문단 번호', '그럼리표' 등을 넣어 문단 종류를 바꿀 것인지, '없음'을 선택해 보통 모양의 문단으로 놓아둘 것인지를 선택.
+
+Parameters:
+
+Name	Type	Description	Default
+heading_type	Literal['None', 'Outline', 'Number', 'Bullet']	문단 종류
+"None": 없음(보통 모양의 문단)
+"Outline": 개요 문단
+"Number": 번호 문단
+"Bullet": 글머리표 문단
+required
+Returns:
+
+Name	Type	Description
+int	int	옵션에 해당하는 정수를 리턴
+HwpLineType(line_type='Solid')
+한/글에서 표나 개체의 선 타입을 결정하는 헬퍼메서드. 단순히 문자열을 정수로 변환한다.
+
+Parameters:
+
+Name	Type	Description	Default
+line_type	Literal['None', 'Solid', 'Dash', 'Dot', 'DashDot', 'DashDotDot', 'LongDash', 'Circle', 'DoubleSlim', 'SlimThick', 'ThickSlim', 'SlimThickSlim']	문자열 파라미터. 종류는 아래와 같다.
+- "None": 없음(0)
+- "Solid": 실선(1)
+- "Dash": 파선(2)
+- "Dot": 점선(3)
+- "DashDot": 일점쇄선(4)
+- "DashDotDot": 이점쇄선(5)
+- "LongDash": 긴 파선(6)
+- "Circle": 원형 점선(7)
+- "DoubleSlim": 이중 실선(8)
+- "SlimThick": 얇고 굵은 이중선(9)
+- "ThickSlim": 굵고 얇은 이중선(10)
+- "SlimThickSlim": 얇고 굵고 얇은 삼중선(11)
+'Solid'
+HwpLineWidth(line_width='0.1mm')
+선 너비를 정해주는 헬퍼 메서드.
+
+목록은 아래와 같다.
+
+Parameters:
+
+Name	Type	Description	Default
+line_width	Literal['0.1mm', '0.12mm', '0.15mm', '0.2mm', '0.25mm', '0.3mm', '0.4mm', '0.5mm', '0.6mm', '0.7mm', '1.0mm', '1.5mm', '2.0mm', '3.0mm', '4.0mm', '5.0mm']	
+"0.1mm": 0
+"0.12mm": 1
+"0.15mm": 2
+"0.2mm": 3
+"0.25mm": 4
+"0.3mm": 5
+"0.4mm": 6
+"0.5mm": 7
+"0.6mm": 8
+"0.7mm": 9
+"1.0mm": 10
+"1.5mm": 11
+"2.0mm": 12
+"3.0mm": 13
+"4.0mm": 14
+"5.0mm": 15
+'0.1mm'
+Returns:
+
+Type	Description
+int	hwp가 인식하는 선굵기 정수(0~15)
+NumberFormat(num_format)
+개요번호 사용자 정의를 위해 미리 정의된 포맷 모음
+
+Parameters:
+
+Name	Type	Description	Default
+num_format(str)		포맷 종류.
+- "Digit": 123
+- "CircledDigit": ①
+- "RomanCapital": I
+- "RomanSmall": i
+- "LatinCapital": A
+- "LatinSmall": a
+- "CircledLatinCapital": Ⓐ
+- "CircledLatinSmall": ⓐ
+- "HangulSyllable": 가나다
+- "CircledHangulSyllable": ㉯
+- "HangulJamo": ㄱㄴㄷ
+- "CircledHangulJamo": ㉠
+- "HangulPhonetic": 일이삼
+- "Ideograph": 一
+- "CircledIdeograph": ㊀
+- "DecagonCircle": 갑을병
+- "DecagonCircleHanja": 甲
+required
+Returns:
+
+Name	Type	Description
+int		해당 정수로 치환됨(Digit=0, CircledDigit=1, ... DecagonCircleHanja=16)
+Examples:
+
+>>> # 개요번호 사용자 정의
+>>> from pyhwpx import Hwp
+>>> hwp = Hwp(new=True)
+>>> pset = hwp.HParameterSet.HSecDef
+>>> hwp.HAction.GetDefault("OutlineNumber", pset.HSet)
+>>> pset.OutlineShape.StrFormatLevel0 = "^1."
+>>> pset.OutlineShape.NumFormatLevel0 = hwp.NumberFormat("RomanCapital")  # <---
+>>> pset.OutlineShape.StartNumber0 = 1
+>>> pset.OutlineShape.NewList = 0
+>>> pset.HSet.SetItem("ApplyClass", 24)  # 앞 구역의 개요 번호에 이어서
+>>> pset.HSet.SetItem("ApplyTo", 3)  # 적용범위(2:현재구역, 3:문서 전체, 4:새 구역으로)
+>>> hwp.HAction.Execute("OutlineNumber", pset.HSet)
+True
+PicEffect(pic_effect='RealPic')
+그림에 효과를 적용할 때 사용하는 헬퍼함수
+
+Parameters:
+
+Name	Type	Description	Default
+pic_effect	Literal['RealPic', 'GrayScale', 'BlackWhite']	효과 종류
+"RealPic": 효과없음
+"GrayScale": 회색조
+"BlackWhite": 흑백
+'RealPic'
+Returns:
+
+Name	Type	Description
+int	int	옵션에 해당하는 정수를 리턴
+hwp_unit_to_mili(hwp_unit) staticmethod
+HwpUnit 값을 밀리미터로 변환한 값을 리턴한다.
+
+HwpUnit으로 리턴되었거나, 녹화된 코드의 HwpUnit값을 확인할 때 유용하게 사용할 수 있다.
+
+Returns:
+
+Type	Description
+float	HwpUnit을 7200으로 나눈 후 25.4를 곱하고 소숫점 셋째자리에서 반올림한 값

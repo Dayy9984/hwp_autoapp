@@ -1,0 +1,9 @@
+pyhwpx>=1.6.0
+pywin32>=300
+PyPDF2
+pdf2image
+pytesseract
+pypdfium2
+pillow
+chromadb==0.4.22
+openai>=2.0.0

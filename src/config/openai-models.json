@@ -1,0 +1,32 @@
+{
+  "defaultModel": "gpt-5.1",
+  "defaultEmbeddingModel": "text-embedding-3-small",
+  "chatModels": [
+    {
+      "id": "gpt-5.1",
+      "label": "GPT-5.1",
+      "description": "추론 강도 설정이 가능한 최신 기본 모델",
+      "pricing": { "input": 1.25, "output": 10.0 }
+    },
+    {
+      "id": "gpt-5.2",
+      "label": "GPT-5.2",
+      "description": "가장 최신 GPT-5 시리즈 (고성능)",
+      "pricing": { "input": 1.75, "output": 14.0 }
+    }
+  ],
+  "embeddingModels": [
+    {
+      "id": "text-embedding-3-small",
+      "label": "text-embedding-3-small",
+      "description": "가볍고 저렴한 임베딩 모델",
+      "pricing": { "input": 0.02 }
+    },
+    {
+      "id": "text-embedding-3-large",
+      "label": "text-embedding-3-large",
+      "description": "고품질 임베딩 모델",
+      "pricing": { "input": 0.13 }
+    }
+  ]
+}
