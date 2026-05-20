@@ -316,6 +316,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('doc:activeChanged', subscription)
     return () => ipcRenderer.removeListener('doc:activeChanged', subscription)
   },
+
+  license: {
+    activate: (key: string) => ipcRenderer.invoke('license:activate', key),
+    verify: () => ipcRenderer.invoke('license:verify'),
+    getInitialStatus: () => ipcRenderer.invoke('license:getInitialStatus'),
+    getCachedKey: () => ipcRenderer.invoke('license:getCachedKey'),
+    tryPendingKey: () => ipcRenderer.invoke('license:tryPendingKey'),
+    openExternal: (url: string) => ipcRenderer.invoke('license:openExternal', url),
+  },
 })
 
 // Splash window API (네이티브 스플래시 화면용)

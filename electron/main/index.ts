@@ -64,6 +64,7 @@ import { registerDbHandlers } from './db-handlers'
 import { registerMaintenanceHandlers } from './maintenance-handlers'
 import { registerUpdateHandlers, setUpdateMainWindow, startAutoUpdateCheck } from './update-handlers'
 import { registerLogHandlers } from './log-handlers'
+import { registerLicenseHandlers, initialLicenseCheck, getLastStatus } from './license-gate'
 import { getLogService } from '../services/log-service'
 import { dbManager } from '../services/db-manager'
 
@@ -1830,6 +1831,12 @@ app.whenReady().then(async () => {
   registerUpdateHandlers()
   registerLogHandlers()
   registerLifecycleGuards()
+  registerLicenseHandlers()
+
+  // 라이센스 초기 검증 — pending key 자동 활성화 + 캐시 토큰 검증
+  // 결과는 렌더러가 license:getInitialStatus IPC로 가져감
+  await initialLicenseCheck()
+  ipcMain.handle('license:getInitialStatus', () => getLastStatus())
 
   // 1. 스플래시 윈도우 먼저 생성 (즉시 표시)
   try {

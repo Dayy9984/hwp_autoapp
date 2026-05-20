@@ -30,6 +30,7 @@ import { useAuthStore } from './stores/auth-store'
 import { useToolStore } from './stores/tool-store'
 import { getProjectChatOrder, loadChatOrderSettings } from './utils/chat-order-storage'
 import './dev-utils/test-data' // Import dev utilities for browser console access
+import { LicenseGate, LicenseState } from './components/LicenseGate'
 
 // 알림 우선순위 (높을수록 중요 - 낮은 우선순위 알림이 높은 우선순위를 덮어쓸 수 없음)
 const NOTIFICATION_PRIORITY: Record<string, number> = {
@@ -37,7 +38,17 @@ const NOTIFICATION_PRIORITY: Record<string, number> = {
   'version-update': 80,
 }
 
+// bridge 응답 + 캐시 키를 LicenseGate state로 정규화 (license_key는 캐시에서 보충)
+function mapLicenseStatus(raw: any, cachedKey: string | null): LicenseState {
+  if (!raw) return { state: 'no_license' }
+  if (['expired', 'leaked', 'revoked'].includes(raw.state)) {
+    return { ...raw, license_key: cachedKey }
+  }
+  return raw
+}
+
 function App() {
+  const [licenseStatus, setLicenseStatus] = useState<LicenseState>({ state: 'loading' })
   const [showSplash, setShowSplash] = useState(true)
   const [pythonReady, setPythonReady] = useState(false)
   const [appStatus, setAppStatus] = useState<{ message: string; progress?: number } | null>(null)
@@ -416,6 +427,53 @@ function App() {
       unsubscribeBound()
     }
   }, [isAuthenticated, clearDocumentState])
+
+  // 라이센스 게이트 — 앱 시작 시 초기 상태 가져오고 24h heartbeat 등록
+  useEffect(() => {
+    const api = (window as any).electronAPI?.license
+    if (!api) return
+    let cancelled = false
+    const sync = async () => {
+      const raw = await api.getInitialStatus()
+      const cachedKey = await api.getCachedKey()
+      if (!cancelled) setLicenseStatus(mapLicenseStatus(raw, cachedKey))
+    }
+    sync()
+    const interval = setInterval(async () => {
+      const raw = await api.verify()
+      const cachedKey = await api.getCachedKey()
+      if (!cancelled) setLicenseStatus(mapLicenseStatus(raw, cachedKey))
+    }, 24 * 3600 * 1000)
+    return () => { cancelled = true; clearInterval(interval) }
+  }, [])
+
+  const handleLicenseActivate = useCallback(async (key: string) => {
+    const api = (window as any).electronAPI?.license
+    if (!api) return
+    const raw = await api.activate(key)
+    const cachedKey = await api.getCachedKey()
+    setLicenseStatus(mapLicenseStatus(raw, cachedKey))
+  }, [])
+
+  const handleLicenseRetry = useCallback(async () => {
+    const api = (window as any).electronAPI?.license
+    if (!api) return
+    const raw = await api.verify()
+    const cachedKey = await api.getCachedKey()
+    setLicenseStatus(mapLicenseStatus(raw, cachedKey))
+  }, [])
+
+  // 라이센스가 ok 또는 offline_grace가 아니면 차단 화면 표시
+  const licenseOk = licenseStatus.state === 'ok' || licenseStatus.state === 'offline_grace'
+  if (!licenseOk) {
+    return (
+      <LicenseGate
+        status={licenseStatus}
+        onActivate={handleLicenseActivate}
+        onRetry={handleLicenseRetry}
+      />
+    )
+  }
 
   // Show splash screen on app start
   if (showSplash) {
