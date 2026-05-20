@@ -19,7 +19,13 @@ from openai import OpenAI
 
 from utils.logger import debug, log_llm_interaction, get_log_dir
 from .system_prompt_v7_11 import build_system_prompt_v7_11
-from .edit_tools_schema import build_v710_edit_tools, build_v711_batch_tools, build_v711_analysis_tools
+from .edit_tools_schema import (
+    build_v710_edit_tools,
+    build_v711_batch_tools,
+    build_v711_analysis_tools,
+    build_v711_plan_tools,
+    build_v711_editing_tools,
+)
 from .edit_tools_parser import parse_v710_tool_call, parse_execute_edits
 
 
@@ -1076,9 +1082,12 @@ class OpenAIStreamingClient:
                     api_params["tool_choice"] = "required"
                     debug(f"[RAG/analysis] tools=[search_rag, thinking], tool_choice=required")
                 else:
-                    api_params["tools"] = batch_tools
-                    api_params["tool_choice"] = "required"
-                    debug("[TOOL/full] v7.11 batch tools, tool_choice=required")
+                    # 파일 X (프로젝트/채팅 파일 없음): 1차 호출을 Plan Call로 사용.
+                    # thinking 강제 호출 → 1차 응답은 편집 계획만 자연어로 작성됨.
+                    # 직후 Editing Call에서 execute_edits/message 호출.
+                    api_params["tools"] = build_v711_plan_tools()
+                    api_params["tool_choice"] = {"type": "function", "name": "thinking"}
+                    debug("[TOOL/no-file] Plan Call: tools=[thinking], tool_choice={thinking}")
             elif enable_file_search and _rag_context.get("project_id"):
                 api_params["tools"] = _build_search_rag_tool(codex_mode=self.codex_mode)
                 api_params["tool_choice"] = "auto"
@@ -1688,11 +1697,113 @@ class OpenAIStreamingClient:
                     if _pending_tool_calls:
                         _last_analysis_resp_id = None
 
+                    # ── Plan Call ──────────────────────────────────────────────
+                    # Analysis Loop 종료 후, Editing Call 진입 전에 thinking 강제 호출.
+                    # 편집 계획을 자연어로 작성 (ID/명령 노출 금지).
+                    # 이 thinking이 사용자에게 표시되는 마지막 추론 단계.
+                    if not self._cancelled:
+                        _plan_instr = (
+                            "분석이 완료되었습니다. 이제 thinking을 호출하여 편집 계획을 자연어로 작성하세요. "
+                            "내용: 어떤 항목을 작성할지, 어떤 항목이 정보 부족이라 미작성 안내가 필요한지. "
+                            "절대 금지: ID 직접 인용, execute_edits 같은 도구/명령어 노출, 마크업 태그. "
+                            "다음 단계(편집)에서는 thinking을 호출할 수 없으니 이 thinking이 마지막 추론 기회입니다."
+                        )
+
+                        _plan_tools = build_v711_plan_tools()
+                        _plan_tool_choice = {"type": "function", "name": "thinking"}
+
+                        if _last_analysis_resp_id:
+                            _plan_params: Dict[str, Any] = {
+                                "model": self.model,
+                                "instructions": system_prompt,
+                                "previous_response_id": _last_analysis_resp_id,
+                                "input": [
+                                    *_analysis_pending_tool_outputs,
+                                    {"type": "message", "role": "user", "content": _plan_instr},
+                                ],
+                                "stream": True,
+                                "max_output_tokens": 16384,
+                                "tools": _plan_tools,
+                                "tool_choice": _plan_tool_choice,
+                            }
+                        else:
+                            _rag_conv_fb.append({"type": "message", "role": "user", "content": _plan_instr})
+                            _plan_params = {
+                                "model": self.model,
+                                "instructions": system_prompt,
+                                "input": list(_rag_conv_fb),
+                                "stream": True,
+                                "max_output_tokens": 16384,
+                                "tools": _plan_tools,
+                                "tool_choice": _plan_tool_choice,
+                            }
+
+                        _plan_resp_id: Any = None
+                        _plan_thinking_content: str = ""
+
+                        try:
+                            self._apply_codex_overrides(_plan_params)
+                            _plan_fu = self.client.responses.create(**_plan_params)
+
+                            for _pf in _iter_stream_events(_plan_fu):
+                                if self._cancelled:
+                                    break
+                                _pft = getattr(_pf, 'type', None)
+
+                                if _pft == "response.output_item.done":
+                                    _pf_item = getattr(_pf, 'item', None)
+                                    if _pf_item and getattr(_pf_item, 'type', None) == "function_call":
+                                        _pf_cid = getattr(_pf_item, 'call_id', None) or getattr(_pf_item, 'id', None)
+                                        _pf_name = getattr(_pf_item, 'name', None)
+                                        _pf_args = getattr(_pf_item, 'arguments', '{}')
+                                        _pf_name, _pf_args = _resolve_tool_call_payload(_pf_cid, _pf_name, _pf_args)
+                                        if _pf_name == "thinking":
+                                            try:
+                                                _parsed_pa = _safe_json_loads(_pf_args)
+                                                _plan_thinking_content = str(_parsed_pa.get("content", "") or "")
+                                            except Exception:
+                                                _plan_thinking_content = ""
+                                            # 사용자에게 plan thinking emit
+                                            _emit_tool_command(_pf_name, _pf_args)
+
+                                elif _pft == "response.completed":
+                                    _resp_obj = getattr(_pf, 'response', None)
+                                    if _resp_obj:
+                                        _plan_resp_id = getattr(_resp_obj, 'id', None)
+                                        if hasattr(_resp_obj, 'usage'):
+                                            _pu = _resp_obj.usage
+                                            token_usage["input"] = token_usage.get("input", 0) + getattr(_pu, 'input_tokens', 0)
+                                            token_usage["output"] = token_usage.get("output", 0) + getattr(_pu, 'output_tokens', 0)
+                                            token_usage["total"] = token_usage.get("total", 0) + getattr(_pu, 'total_tokens', 0)
+
+                            # Plan 결과를 fallback conversation에 누적 (Codex 모드용)
+                            if _is_codex and _plan_thinking_content:
+                                _rag_conv_fb.append({
+                                    "type": "message",
+                                    "role": "assistant",
+                                    "content": f"<EDIT_PLAN>\n{_plan_thinking_content}\n</EDIT_PLAN>",
+                                })
+
+                            # API 모드: previous_response_id를 Plan Call의 응답으로 갱신
+                            if not _is_codex and _plan_resp_id:
+                                _last_analysis_resp_id = _plan_resp_id
+
+                            debug(f"[RAG/plan] Plan Call 완료: thinking_len={len(_plan_thinking_content)}")
+
+                        except Exception as _pe:
+                            debug(f"[RAG/plan] Plan Call 실패 (편집은 계속): {_pe}")
+
                     # ── editing call (단일 호출, search_rag 없음) ──────────────
+                    # thinking tool 제외: editing 단계에서 thinking 단독 호출로 종료되는
+                    # 패턴을 원천 차단. 편집 계획 추론은 직전 Plan Call에서 완료됨.
+                    _editing_tools = build_v711_editing_tools()
+
                     if not self._cancelled:
                         _edit_instr = (
-                            "위 검색 결과를 바탕으로 편집을 진행하세요. "
-                            "execute_edits의 operations 배열과 message 필드를 반드시 포함해야 합니다."
+                            "위 thinking에서 작성한 편집 계획을 그대로 실행하세요. "
+                            "정보 충분 → execute_edits (operations + message). "
+                            "정보 부족 → message 호출하여 안내. "
+                            "thinking을 다시 호출하지 마세요 (이미 분석/계획 완료)."
                         )
                         _rag_conv_fb.append({"type": "message", "role": "user", "content": _edit_instr})
 
@@ -1707,7 +1818,7 @@ class OpenAIStreamingClient:
                                 ],
                                 "stream": True,
                                 "max_output_tokens": 32768,
-                                "tools": batch_tools,
+                                "tools": _editing_tools,
                                 "tool_choice": "required",
                             }
                         else:
@@ -1717,7 +1828,7 @@ class OpenAIStreamingClient:
                                 "input": list(_rag_conv_fb),
                                 "stream": True,
                                 "max_output_tokens": 32768,
-                                "tools": batch_tools,
+                                "tools": _editing_tools,
                                 "tool_choice": "required",
                             }
 
@@ -1804,6 +1915,156 @@ class OpenAIStreamingClient:
 
                 except Exception as e:
                     debug(f"[RAG] analysis/editing pipeline error: {e}")
+
+            elif use_delta and not _has_rag and not self._cancelled:
+                # 파일 X 경로: 1차 호출(Plan Call) 후 Editing Call로 진입.
+                # 1차 호출에서 thinking이 emit됨. Editing Call에서
+                # execute_edits 또는 message 둘 중 하나 반드시 호출.
+                try:
+                    _is_codex = getattr(self, 'codex_mode', False)
+                    _last_resp_id = None if _is_codex else response_id
+
+                    # 1차 호출의 thinking content 추출 (Codex 모드 conversation용)
+                    _plan_thinking = ""
+                    for _tc_state in tool_calls_state.values():
+                        if _tc_state.get("name") == "thinking":
+                            try:
+                                _parsed = _safe_json_loads(_tc_state.get("args", "{}"))
+                                _plan_thinking = str(_parsed.get("content", "") or "")
+                                if _plan_thinking:
+                                    break
+                            except Exception:
+                                pass
+
+                    _editing_tools = build_v711_editing_tools()
+                    _edit_instr = (
+                        "위 thinking 편집 계획을 그대로 실행하세요. "
+                        "정보 충분 → execute_edits (operations + message). "
+                        "정보 부족/단순 질문 → message로 응답. "
+                        "thinking은 호출하지 마세요 (이미 분석 완료)."
+                    )
+
+                    _no_rag_conv: List[Dict[str, Any]] = [
+                        {"type": "message", "role": "user", "content": user_message}
+                    ]
+                    if _plan_thinking:
+                        _no_rag_conv.append({
+                            "type": "message", "role": "assistant",
+                            "content": f"<EDIT_PLAN>\n{_plan_thinking}\n</EDIT_PLAN>",
+                        })
+                    _no_rag_conv.append({"type": "message", "role": "user", "content": _edit_instr})
+
+                    if _last_resp_id:
+                        _e_params: Dict[str, Any] = {
+                            "model": self.model,
+                            "instructions": editing_prompt or system_prompt,
+                            "previous_response_id": _last_resp_id,
+                            "input": [{"type": "message", "role": "user", "content": _edit_instr}],
+                            "stream": True,
+                            "max_output_tokens": 32768,
+                            "tools": _editing_tools,
+                            "tool_choice": "required",
+                        }
+                    else:
+                        _e_params = {
+                            "model": self.model,
+                            "instructions": editing_prompt or system_prompt,
+                            "input": _no_rag_conv,
+                            "stream": True,
+                            "max_output_tokens": 32768,
+                            "tools": _editing_tools,
+                            "tool_choice": "required",
+                        }
+
+                    try:
+                        self._apply_codex_overrides(_e_params)
+                        _e_fu = self.client.responses.create(**_e_params)
+                    except Exception as _ee:
+                        debug(f"[no-file/editing] API error: {_ee}")
+                        _e_params.pop("previous_response_id", None)
+                        _e_params["input"] = _no_rag_conv
+                        self._apply_codex_overrides(_e_params)
+                        _e_fu = self.client.responses.create(**_e_params)
+
+                    # 스트리밍 이벤트 처리 (_has_rag editing call과 동일 로직)
+                    for _ef in _iter_stream_events(_e_fu):
+                        if self._cancelled:
+                            break
+                        _eft = getattr(_ef, 'type', None)
+
+                        if _eft == "response.function_call_arguments.delta":
+                            _ef_cid = getattr(_ef, 'call_id', None) or getattr(_ef, 'item_id', None)
+                            _ef_dlt = getattr(_ef, 'delta', None)
+                            _ef_adelta = getattr(_ef_dlt, 'arguments', '') if _ef_dlt else ''
+                            _ef_tidx = None
+                            for _ti, _ts in tool_calls_state.items():
+                                if _ts.get("id") == _ef_cid:
+                                    _ef_tidx = _ti
+                                    break
+                            if _ef_tidx is None:
+                                _ef_tidx = len(tool_calls_state)
+                                tool_calls_state[_ef_tidx] = {"id": _ef_cid, "name": None, "args": ""}
+                            if _ef_adelta:
+                                tool_calls_state[_ef_tidx]["args"] += _ef_adelta
+                            continue
+
+                        if _eft == "response.output_item.added":
+                            _ef_item = getattr(_ef, 'item', None)
+                            if _ef_item and getattr(_ef_item, 'type', None) == "function_call":
+                                _ef_cid = getattr(_ef_item, 'call_id', None) or getattr(_ef_item, 'id', None)
+                                _ef_name = getattr(_ef_item, 'name', None)
+                                if _ef_cid and _ef_name:
+                                    _ef_tidx = None
+                                    for _ti, _ts in tool_calls_state.items():
+                                        if _ts.get("id") == _ef_cid:
+                                            _ef_tidx = _ti
+                                            break
+                                    if _ef_tidx is None:
+                                        _ef_tidx = len(tool_calls_state)
+                                        tool_calls_state[_ef_tidx] = {"id": _ef_cid, "name": _ef_name, "args": ""}
+                            continue
+
+                        if _eft == "response.output_item.done":
+                            _ef_item = getattr(_ef, 'item', None)
+                            if _ef_item and getattr(_ef_item, 'type', None) == "function_call":
+                                _ef_cid = getattr(_ef_item, 'call_id', None) or getattr(_ef_item, 'id', None)
+                                _ef_name = getattr(_ef_item, 'name', None)
+                                _ef_args = getattr(_ef_item, 'arguments', '{}')
+                                _ef_name, _ef_args = _resolve_tool_call_payload(_ef_cid, _ef_name, _ef_args)
+                                if _ef_name:
+                                    _emit_tool_command(_ef_name, _ef_args)
+                            else:
+                                _handle_output_item_done(_ef_item)
+
+                        elif _eft == "response.output_text.delta":
+                            _ef_dlt_obj = getattr(_ef, 'delta', None)
+                            if _ef_dlt_obj:
+                                _ef_txt = _safe_get(_ef_dlt_obj, 'text') or _safe_get(_ef_dlt_obj, 'output_text') or ''
+                                if _ef_txt:
+                                    output_text_delta_seen = True
+                                    _handle_output_delta(_ef_txt)
+
+                        elif _eft == "response.output_text.done":
+                            if output_text_delta_seen or output_text_done_seen:
+                                continue
+                            _ef_txt = _safe_get(_ef, 'text')
+                            if not _ef_txt:
+                                _ef_dlt_obj = getattr(_ef, 'delta', None)
+                                if _ef_dlt_obj:
+                                    _ef_txt = _safe_get(_ef_dlt_obj, 'text') or _safe_get(_ef_dlt_obj, 'output_text')
+                            if _ef_txt:
+                                _handle_output_delta(_ef_txt)
+                                output_text_done_seen = True
+
+                        elif _eft == "response.completed":
+                            if hasattr(_ef, 'response') and hasattr(_ef.response, 'usage'):
+                                _eu = _ef.response.usage
+                                token_usage["input"] = token_usage.get("input", 0) + getattr(_eu, 'input_tokens', 0)
+                                token_usage["output"] = token_usage.get("output", 0) + getattr(_eu, 'output_tokens', 0)
+                                token_usage["total"] = token_usage.get("total", 0) + getattr(_eu, 'total_tokens', 0)
+
+                except Exception as e:
+                    debug(f"[no-file/editing] pipeline error: {e}")
 
             if deferred_message_cmd is not None and not thinking_emitted:
                 _emit_auto_thinking("auto_injected_missing_first_thinking_before_final_message")
