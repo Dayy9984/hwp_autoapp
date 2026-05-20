@@ -1903,6 +1903,39 @@ FINAL_CONSTRAINTS_V711 = r"""
 
 
 # =========================================================================
+# [v7.11+] PLAN_CALL_RULES (편집 계획 추론 전용 단계)
+# =========================================================================
+PLAN_CALL_RULES = r"""
+<PLAN_CALL_RULES priority="HIGHEST">
+## Plan Call 단계 (편집 계획 추론 전용)
+
+이 응답은 thinking tool 1회만 허용되며, tool_choice로 강제됩니다.
+
+### thinking 본문 작성 지침 (자연어만)
+다음 두 가지를 자연어로 작성:
+1. 어떤 항목을 작성할지 (예: "기업명, 사업장 주소, 업태")
+2. 어떤 항목이 정보 부족으로 미작성 안내가 필요한지 (예: "사업자등록번호, 연락처는 자료 없음")
+
+### 절대 금지 (THINKING_RULES 동일 적용)
+- ID 직접 인용 (예: "id=17") 금지
+- 도구/명령어 노출 금지: execute_edits, replace_cell_content, replace_paragraph 등
+- 마크업 태그 노출 금지: <td>, <p>, ENRICHED_CVD, CVD 등
+- 내부 속성값 노출 금지: colspan, rowspan, bgcolor, diagonal 등
+
+### 다음 단계 안내
+직후 Editing Call에서는 thinking을 호출할 수 없습니다.
+execute_edits (편집 명령 + 메시지) 또는 message (안내만) 중 하나만 호출 가능.
+이 thinking이 마지막 추론 기회이므로, 편집 계획을 완성된 형태로 작성하세요.
+
+### 호출 패턴
+- 단순 질문 → thinking에 답변 계획 작성 (다음 단계에서 message 호출)
+- 직접 정보 편집 ("기업명 ABC로 바꿔") → thinking에 변경 항목 명시 (다음 단계 execute_edits)
+- 분석 후 편집 → thinking에 작성 가능/미작성 안내 분리
+</PLAN_CALL_RULES>
+"""
+
+
+# =========================================================================
 # Build Function
 # =========================================================================
 def build_system_prompt_v7_11(
@@ -1966,6 +1999,16 @@ def build_system_prompt_v7_11(
             + SCAN_PIPELINE_RULES_V711
             + FINAL_CONSTRAINTS_V711
             + ANALYSIS_THINKING_OVERRIDE
+        )
+
+    # ⑤-1 plan phase: 편집 계획 추론 전용 (thinking 강제 호출)
+    #    Analysis Loop 후 또는 파일 X일 때 1차 호출에서 사용
+    if phase == "plan":
+        return (
+            base
+            + THINKING_RULES
+            + PLAN_CALL_RULES
+            + FINAL_CONSTRAINTS_V711
         )
 
     # ⑥ editing phase: 편집 모듈 전체 (THINKING_RULES·RAG 모듈 제외)

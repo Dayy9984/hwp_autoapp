@@ -2,7 +2,7 @@
 
 <img src="docs/images/hero.png" alt="Inserty AI" width="100%" />
 
-# Inserty AI
+# Hwp 자동화 프로그램
 
 **AI로 한글(HWP) 문서를 편집하는 데스크탑 앱**
 
@@ -214,10 +214,10 @@ insertyai/
 │   │   └── edit_tools_schema.py    #   도구 스키마 (execute_edits 등)
 │   ├── modification/               # 문서 수정 엔진 (content_modifier 등)
 │   ├── parsing/                    # HWPML 파서
-│   ├── processing/                 # CVD 추출 파이프라인
-│   │   ├── extraction/             #   CVD 추출기
+│   ├── processing/                 # 압축문서 추출 파이프라인
+│   │   ├── extraction/             #   압축문서 추출기
 │   │   ├── conversion/             #   마크업 변환기
-│   │   ├── structure/              #   문서 구조 빌더 (Enriched CVD)
+│   │   ├── structure/              #   문서 구조 빌더 
 │   │   └── detection/              #   form/table 감지
 │   ├── readers/                    # PDF/Word/Excel 파일 리더
 │   ├── services/                   # 파일 검색·RAG·diff·세션

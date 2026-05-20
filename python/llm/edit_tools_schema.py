@@ -359,3 +359,26 @@ def build_v711_analysis_tools() -> List[Dict[str, Any]]:
     execute_edits·message는 analysis 단계에서 보이면 안 됨 (수정4).
     """
     return [_build_schema_for("thinking")]
+
+
+def build_v711_plan_tools() -> List[Dict[str, Any]]:
+    """plan phase 전용 도구: thinking만 반환.
+
+    Analysis Loop 종료 후 편집 계획 추론 전용 단계.
+    tool_choice를 thinking으로 강제하여 편집 계획을 자연어로 작성하게 함.
+    ID/명령어 노출 금지 규칙은 THINKING_RULES 적용.
+    """
+    return [_build_schema_for("thinking")]
+
+
+def build_v711_editing_tools() -> List[Dict[str, Any]]:
+    """editing phase 전용 도구: execute_edits + message만 반환.
+
+    thinking tool은 제외 — Plan Call에서 이미 편집 계획 추론 완료.
+    tool_choice="required"와 결합 시 LLM은 execute_edits 또는 message 중
+    반드시 하나를 호출해야 함. thinking-only 종료 패턴 원천 차단.
+    """
+    return [
+        _build_execute_edits_schema(),
+        _build_schema_for("message"),
+    ]
