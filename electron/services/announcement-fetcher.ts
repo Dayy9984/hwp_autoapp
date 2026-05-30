@@ -50,16 +50,27 @@ class AnnouncementFetcher {
 
   async fetchNow(): Promise<void> {
     const token = (licenseBridge as any).pickAuthToken?.() as string | null
-    if (!token) return
+    if (!token) {
+      console.log('[announcement-fetcher] skip — no license token')
+      return
+    }
     const deviceId = getDeviceInfo().device_id
     try {
       const r = await fetch(ANNOUNCEMENTS_URL, {
         headers: { Authorization: `Bearer ${token}`, 'X-Device-Id': deviceId },
       })
-      if (!r.ok) return
+      if (!r.ok) {
+        console.log(`[announcement-fetcher] fetch failed ${r.status}: ${(await r.text()).slice(0, 100)}`)
+        return
+      }
       const data = (await r.json()) as { items?: Announcement[] }
-      if (Array.isArray(data.items)) this.items = data.items
-    } catch {}
+      if (Array.isArray(data.items)) {
+        this.items = data.items
+        console.log(`[announcement-fetcher] fetched ${data.items.length} items`)
+      }
+    } catch (e) {
+      console.log('[announcement-fetcher] exception:', (e as Error).message)
+    }
   }
 
   list(): Announcement[] {

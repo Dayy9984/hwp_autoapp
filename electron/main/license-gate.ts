@@ -4,6 +4,7 @@
 import { ipcMain, shell } from 'electron'
 import { licenseBridge, LicenseStatus } from '../services/license-bridge'
 import { pushBetaCredsNow } from '../services/beta-creds-push'
+import { announcementFetcher } from '../services/announcement-fetcher'
 
 let lastStatus: LicenseStatus = { state: 'no_license' }
 
@@ -12,9 +13,11 @@ export function registerLicenseHandlers() {
   ipcMain.handle('license:activate', async (_evt, license_key: string) => {
     const result = await licenseBridge.activate(license_key)
     lastStatus = result
-    // 활성화 직후 Python 에 verify 토큰 + device_id 푸시 (베타 trace)
     if (result.state === 'ok') {
+      // Python 에 verify 토큰 + device_id 푸시 (베타 trace)
       pushBetaCredsNow().catch(() => {})
+      // 알림 즉시 fetch (사용자가 활성화 후 알림 종 클릭 전 미리 채워둠)
+      announcementFetcher.fetchNow().catch(() => {})
     }
     return result
   })

@@ -65,47 +65,55 @@ export function BetaAnnouncementCenter({ compact = false }: Props) {
     if (key) setEmbedKey({ key, title })
   }
 
-  if (items.length === 0) return null
-
   const critical = items.find((a) => a.type === 'critical-update' || a.priority >= 90)
   const badgeCount = items.length
+  const hasItems = items.length > 0
 
   return (
     <>
       <button
         onClick={() => setOpen(!open)}
         aria-label={`알림 ${badgeCount}건`}
-        className={`relative flex items-center gap-2 px-3 py-2 rounded-xl transition-all hover:bg-sidebar-hover group ${critical ? 'text-red-500' : 'text-text-secondary'} hover:text-text ${compact ? 'justify-center' : ''}`}
-        style={{ width: '100%' }}
+        className={`relative w-full flex items-center gap-2 px-2 py-1.5 rounded-lg transition-all hover:bg-sidebar-hover group ${critical ? 'text-red-500' : 'text-text-tertiary'} hover:text-text ${compact ? 'justify-center' : ''}`}
       >
-        <Bell size={16} />
-        {!compact && <span className="text-xs">알림</span>}
-        <span style={{
-          position: 'absolute', top: 4, right: compact ? 4 : 8,
-          background: critical ? '#DC2626' : '#E86B45', color: '#FFF',
-          fontSize: 10, fontWeight: 600,
-          padding: '1px 6px', borderRadius: 10,
-        }}>{badgeCount}</span>
+        <Bell size={15} />
+        {!compact && <span className="text-xs">알림{hasItems ? ` (${badgeCount})` : ''}</span>}
+        {hasItems && (
+          <span style={{
+            position: 'absolute', top: 2, right: compact ? 2 : 6,
+            background: critical ? '#DC2626' : '#E86B45', color: '#FFF',
+            fontSize: 9, fontWeight: 600,
+            padding: '1px 5px', borderRadius: 8,
+          }}>{badgeCount}</span>
+        )}
       </button>
 
       {open && (
         <div
           onClick={() => setOpen(false)}
-          style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.3)', zIndex:40 }}
+          style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', backdropFilter:'blur(2px)', zIndex:60, display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}
         >
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
-              position:'absolute', bottom:24, left:240, width:380, maxHeight:'70vh',
-              background:'#FFF', borderRadius:12, boxShadow:'0 10px 30px rgba(0,0,0,0.15)',
+              width:'min(560px, 92vw)', maxHeight:'80vh',
+              background:'#FFF', borderRadius:16, boxShadow:'0 20px 60px rgba(0,0,0,0.25)',
               overflow:'hidden', display:'flex', flexDirection:'column',
             }}
           >
-            <div style={{ padding:'12px 16px', borderBottom:'1px solid #F3F4F6', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-              <div style={{ fontSize:13, fontWeight:600 }}>알림 {items.length}건</div>
-              <button onClick={() => setOpen(false)} style={{ background:'none', border:'none', cursor:'pointer', color:'#9CA3AF' }}><X size={16} /></button>
+            <div style={{ padding:'16px 20px', borderBottom:'1px solid #F3F4F6', display:'flex', justifyContent:'space-between', alignItems:'center', background:'linear-gradient(180deg, #FFF8F5 0%, #FFF 100%)' }}>
+              <div>
+                <div style={{ fontSize:15, fontWeight:600, color:'#1F2937' }}>알림</div>
+                <div style={{ fontSize:11, color:'#9CA3AF', marginTop:2 }}>{items.length > 0 ? `${items.length}건의 새 알림이 있습니다` : '새 알림 없음'}</div>
+              </div>
+              <button onClick={() => setOpen(false)} style={{ background:'#F3F4F6', border:'none', cursor:'pointer', color:'#6B7280', padding:'6px 8px', borderRadius:8 }} aria-label="닫기"><X size={16} /></button>
             </div>
             <div style={{ overflowY:'auto', flex:1 }}>
+              {items.length === 0 && (
+                <div style={{ padding:'40px 20px', textAlign:'center', color:'#9CA3AF', fontSize:13 }}>
+                  새 알림이 없습니다
+                </div>
+              )}
               {items.map((a) => (
                 <div key={a.id} style={{ padding:'12px 16px', borderBottom:'1px solid #F9FAFB', background: a.priority >= 90 ? '#FEF2F2' : 'transparent' }}>
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8 }}>
