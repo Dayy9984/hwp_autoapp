@@ -1,7 +1,7 @@
 {
   "name": "inserty-desktop",
   "productName": "Inserty AI",
-  "version": "0.1.9",
+  "version": "0.1.9-beta.1",
   "main": "dist-electron/main/index.mjs",
   "description": "Inserty AI - AI 기반 문서 편집 솔루션",
   "author": "Inserty Team",
@@ -39,11 +39,11 @@
     "@aws-sdk/client-s3": "^3.984.0",
     "async-mutex": "^0.5.0",
     "better-sqlite3": "^12.6.2",
+    "builder-util-runtime": "9.3.1",
     "bytenode": "^1.3.6",
     "dotenv": "^16.4.5",
-    "electron-updater": "^6.7.3",
+    "electron-updater": "^6.6.2",
     "lucide-react": "^0.562.0",
-    "node-machine-id": "^1.1.12",
     "zustand": "^4.5.0"
   },
   "devDependencies": {
@@ -59,6 +59,7 @@
     "electron": "^33.2.0",
     "electron-builder": "24.13.1",
     "javascript-obfuscator": "^5.1.0",
+    "playwright": "^1.60.0",
     "postcss": "^8.4.49",
     "postcss-import": "^16.1.0",
     "react": "^18.3.1",

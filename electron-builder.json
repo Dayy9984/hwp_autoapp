@@ -48,17 +48,26 @@
         "arch": ["x64"]
       }
     ],
-    "artifactName": "${productName}_${version}_Setup.${ext}"
+    "artifactName": "Inserty-AI_${version}_Setup.${ext}"
   },
   "nsis": {
-    "oneClick": false,
-    "perMachine": true,
-    "allowToChangeInstallationDirectory": true,
+    "oneClick": true,
+    "perMachine": false,
     "deleteAppDataOnUninstall": false,
     "uninstallDisplayName": "Inserty AI",
     "shortcutName": "Inserty AI",
     "installerIcon": "build/icon.ico",
     "uninstallerIcon": "build/icon.ico",
+    "installerSidebar": "build/installer-sidebar.bmp",
+    "installerHeader": "build/installer-header.bmp",
+    "runAfterFinish": true,
     "include": "build/installer.nsh"
+  },
+  "publish": {
+    "provider": "github",
+    "owner": "OpenScoutAI",
+    "repo": "insertyai-beta",
+    "private": true,
+    "releaseType": "release"
   }
 }
