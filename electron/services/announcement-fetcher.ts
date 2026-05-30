@@ -55,6 +55,7 @@ class AnnouncementFetcher {
       return
     }
     const deviceId = getDeviceInfo().device_id
+    console.log(`[announcement-fetcher] fetch — token=${token.slice(0,20)}... device=${deviceId.slice(0,12)}...`)
     try {
       const r = await fetch(ANNOUNCEMENTS_URL, {
         headers: { Authorization: `Bearer ${token}`, 'X-Device-Id': deviceId },
