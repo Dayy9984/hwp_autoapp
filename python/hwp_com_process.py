@@ -1489,9 +1489,30 @@ class DocumentProcessor:
             adapter = self._ensure_connector()
 
             if not adapter.open_file(file_path):
+                # beta trace: open 실패도 기록 (세션 시작 시도)
+                try:
+                    from services.beta_trace import start_session
+                    s = start_session(file_path)
+                    if s:
+                        s.extract("open", error_type="open_failed", error_msg="파일 열기 실패")
+                        s.flush()
+                except Exception:
+                    pass
                 return {"success": False, "error": "파일 열기 실패"}
 
             self._current_file = file_path
+
+            # beta trace: 새 세션 + R2 업로드 + open 단계 기록
+            try:
+                from services.beta_trace import start_session
+                import os
+                s = start_session(file_path)
+                if s:
+                    s.extract("open", doc_size_kb=int(os.path.getsize(file_path) / 1024))
+            except Exception as e:
+                # fire-and-forget — 본 작업 영향 X
+                print(f"[beta_trace] open hook failed: {e}", file=sys.stderr)
+
             return {"success": True, "file": file_path}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -1967,6 +1988,12 @@ class DocumentProcessor:
 
     def close_document(self) -> dict:
         """문서 닫기"""
+        # beta trace: 남은 큐 flush + 세션 종료
+        try:
+            from services.beta_trace import end_session
+            end_session()
+        except Exception:
+            pass
         try:
             if self._connector:
                 self._connector.disconnect()
@@ -3712,6 +3739,8 @@ class DocumentProcessor:
 
             if block_manager:
                 try:
+                    import time as _t_beta
+                    _t0 = _t_beta.time()
                     document_graph = build_document_graph_from_hwpml(
                         hwpml_text=hwpml_text,
                         block_manager=block_manager,
@@ -3724,10 +3753,32 @@ class DocumentProcessor:
                         document_graph,
                         page_range=(actual_start, actual_end),
                     )
+                    # beta trace: cvd_step
+                    try:
+                        from services.beta_trace import get_session
+                        s = get_session()
+                        if s:
+                            blocks = document_graph.get("nodes", []) if isinstance(document_graph, dict) else []
+                            s.cvd(
+                                "serialize",
+                                duration_ms=int((_t_beta.time() - _t0) * 1000),
+                                cvd_chars=len(document_graph_json or ""),
+                                cvd_blocks=len(blocks) if isinstance(blocks, list) else None,
+                            )
+                    except Exception:
+                        pass
                 except Exception as graph_error:
                     print(f"[Python] document graph build failed: {graph_error}", file=sys.stderr)
                     document_graph = {}
                     document_graph_json = ""
+                    # beta trace: 실패
+                    try:
+                        from services.beta_trace import get_session
+                        s = get_session()
+                        if s:
+                            s.cvd("serialize", error_type=type(graph_error).__name__, error_msg=str(graph_error)[:300])
+                    except Exception:
+                        pass
 
             # target_uid <-> id 인덱스 캐시
             self._target_uid_to_id = {}
@@ -6616,6 +6667,17 @@ def handle_request(processor: DocumentProcessor, request: dict) -> dict:
     try:
         if method == "ping":
             result["result"] = {"pong": True}
+
+        elif method == "beta:set_creds":
+            # Electron 이 라이센스 verify 토큰 + device_id 등록 / 갱신
+            try:
+                from services.beta_trace import set_credentials
+                result["result"] = set_credentials(
+                    params.get("token", ""),
+                    params.get("device_id", ""),
+                )
+            except Exception as e:
+                result["result"] = {"ok": False, "error": str(e)}
 
         elif method == "open":
             result["result"] = processor.open_document(params.get("file"))

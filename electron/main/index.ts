@@ -83,6 +83,7 @@ import { getLogService } from '../services/log-service'
 import { dbManager } from '../services/db-manager'
 import { telemetry } from '../services/telemetry'
 import { announcementFetcher, registerAnnouncementHandlers } from '../services/announcement-fetcher'
+import { startBetaCredsPushLoop, pushBetaCredsNow } from '../services/beta-creds-push'
 
 
 
@@ -1860,6 +1861,9 @@ app.whenReady().then(async () => {
   // 베타 announcement 시스템 — 5분마다 fetch + dismissed 캐시.
   announcementFetcher.init()
   registerAnnouncementHandlers()
+
+  // 베타 trace creds — 라이센스 토큰을 Python 에 30분마다 푸시 (토큰 갱신 대응).
+  startBetaCredsPushLoop()
 
   // 라이센스 초기 검증 — pending key 자동 활성화 + 캐시 토큰 검증
   // BrowserWindow 생성 전에 결과가 결정되어야 렌더러가 getInitialStatus 호출 시
