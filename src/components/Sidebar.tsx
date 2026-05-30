@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import { useBetaSurveyStore } from '../stores/beta-survey-store'
 import { IS_BETA } from '../config/beta'
+import { BetaAnnouncementCenter } from './BetaAnnouncementCenter'
 
 type TabType = 'chat' | 'tools'
 
@@ -384,9 +385,10 @@ export function Sidebar() {
       {/* 베타 카운트다운 — Settings 위에 작게 */}
       <BetaCountdown compact={isCollapsed} />
 
-      {/* 베타 피드백 메뉴 — 기능 요청 / 버그 신고 */}
+      {/* 베타 피드백 메뉴 — 알림 / 기능 요청 / 버그 신고 */}
       {IS_BETA && (
         <div className="flex-shrink-0 px-3 pb-1 space-y-0.5">
+          <BetaAnnouncementCenter compact={isCollapsed} />
           <button
             onClick={() => useBetaSurveyStore.getState().openModal('feature_request', '어떤 기능이 있으면 좋을까요?')}
             aria-label="기능 요청"

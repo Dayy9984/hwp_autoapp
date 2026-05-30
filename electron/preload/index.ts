@@ -335,6 +335,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     track: (eventType: string, payload?: Record<string, unknown>) =>
       ipcRenderer.invoke('telemetry:track', eventType, payload),
   },
+
+  announcements: {
+    list: () => ipcRenderer.invoke('announcements:list'),
+    dismiss: (id: string) => ipcRenderer.invoke('announcements:dismiss', id),
+    refresh: () => ipcRenderer.invoke('announcements:refresh'),
+  },
 })
 
 // Splash window API (네이티브 스플래시 화면용)
