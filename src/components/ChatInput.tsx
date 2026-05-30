@@ -139,9 +139,20 @@ export function ChatInput({ folderId }: ChatInputProps = {}) {
     return chat?.messages.find((msg) => msg.id === messageId)?.metadata
   }
 
-  const ensureOpenAiKey = () => {
-    // Codex(ChatGPT) 모드는 API 키 불필요
-    if (connectionMode === 'codex') return true
+  const ensureOpenAiKey = async () => {
+    // Codex(ChatGPT) 모드: 인증 상태 사전 체크
+    if (connectionMode === 'codex') {
+      const api = (window as unknown as { electronAPI?: any }).electronAPI
+      if (!api?.codex?.status) return true
+      try {
+        const s = await api.codex.status()
+        if (!s.installed || !s.authenticated) {
+          window.dispatchEvent(new CustomEvent('beta:codex-needs-setup'))
+          return false
+        }
+      } catch { /* fall through */ }
+      return true
+    }
     if (openaiApiKey && openaiApiKey.trim()) return true
     const confirmed = window.confirm('OpenAI API 키가 필요합니다. 설정의 모델 및 AI 탭에서 키를 등록할까요?')
     if (confirmed) {
@@ -272,7 +283,7 @@ export function ChatInput({ folderId }: ChatInputProps = {}) {
   }
 
   const indexChatFileInRag = async (chatId: string, file: UploadedFile) => {
-    if (!ensureOpenAiKey()) {
+    if (!(await ensureOpenAiKey())) {
       return
     }
     const pendingDeleteKey = makePendingDeleteKey(chatId, file.id)
@@ -929,7 +940,7 @@ export function ChatInput({ folderId }: ChatInputProps = {}) {
 
   const handleSend = async () => {
     if (!input.trim() || isLoading) return
-    if (!ensureOpenAiKey()) return
+    if (!(await ensureOpenAiKey())) return
 
     let chatId = currentChatId
     const uploadedFilesSnapshot = [...uploadedFiles]

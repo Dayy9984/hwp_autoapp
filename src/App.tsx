@@ -10,7 +10,8 @@ import { AddFolderFileModal } from './components/modals/AddFolderFileModal'
 import { SettingsModal } from './components/modals/SettingsModal'
 import { TallyEmbedModal } from './components/modals/TallyEmbedModal'
 import { useBetaSurveyStore } from './stores/beta-survey-store'
-import { IS_BETA } from './config/beta'
+import { IS_BETA, BETA_CODEX_ONLY } from './config/beta'
+import { CodexAutoSetup } from './components/CodexAutoSetup'
 import { NotificationModal, Notification } from './components/modals/NotificationModal'
 import { SignatureToolModal } from './components/modals/SignatureToolModal'
 import { ToolEditModal } from './components/modals/ToolEditModal'
@@ -524,6 +525,7 @@ function App() {
         <AddFolderFileModal />
         <SettingsModal />
         {IS_BETA && <BetaSurveyMount />}
+        {BETA_CODEX_ONLY && <CodexAutoSetup />}
         <NotificationModal
           notification={notification}
           onClose={clearNotification}
