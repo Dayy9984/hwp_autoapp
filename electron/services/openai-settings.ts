@@ -1,5 +1,8 @@
 import { dbManager } from './db-manager'
 
+// 베타: src/config/beta.ts 와 동기. true 일 때 connectionMode 'codex' 강제 (DB 무시).
+const BETA_CODEX_ONLY = true
+
 export type OpenAiSettings = {
   apiKey: string | null
   defaultModel: string
@@ -36,7 +39,7 @@ export const getOpenAiSettings = (): OpenAiSettings => {
     defaultModel: DEFAULT_MODEL,
     fileSearchModel: DEFAULT_MODEL,
     embeddingModel: DEFAULT_EMBEDDING_MODEL,
-    connectionMode: 'api',
+    connectionMode: BETA_CODEX_ONLY ? 'codex' : 'api',
   }
 
   try {
@@ -64,7 +67,7 @@ export const getOpenAiSettings = (): OpenAiSettings => {
       defaultModel,
       fileSearchModel: defaultModel,
       embeddingModel,
-      connectionMode: settings.connection_mode === 'codex' ? 'codex' : 'api',
+      connectionMode: BETA_CODEX_ONLY ? 'codex' : (settings.connection_mode === 'codex' ? 'codex' : 'api'),
     }
   } catch {
     return defaults
