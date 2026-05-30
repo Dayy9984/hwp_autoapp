@@ -123,13 +123,24 @@ export class AgentBridge extends EventEmitter {
     return new Promise((resolve, reject) => {
       const isDev = !app.isPackaged
 
+      // 베타 trace: agent subprocess 에 verify token + device_id 주입.
+      // agent 는 LLM 호출 1회 단위로 짧게 살아 토큰 만료 거의 없음.
+      const betaEnv: Record<string, string> = {}
+      try {
+        const { licenseBridge } = require('./license-bridge') as typeof import('./license-bridge')
+        const { getDeviceInfo } = require('./license-device-id') as typeof import('./license-device-id')
+        const token = (licenseBridge as any).pickAuthToken?.() as string | null
+        if (token) betaEnv.INSERTYAI_LICENSE_TOKEN = token
+        betaEnv.INSERTYAI_DEVICE_ID = getDeviceInfo().device_id
+      } catch {}
+
       if (isDev) {
         // 개발 모드: uv로 Agent Process 실행
         this.log(`[AgentBridge] Starting (dev): uv run python agent_process.py in ${this.pythonDir}`)
         this.process = spawn('uv', ['run', 'python', 'agent_process.py'], {
           stdio: ['pipe', 'pipe', 'pipe'],
           cwd: this.pythonDir,
-          env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+          env: { ...process.env, PYTHONIOENCODING: 'utf-8', ...betaEnv },
           shell: true,
         })
       } else {
@@ -148,7 +159,7 @@ export class AgentBridge extends EventEmitter {
         this.process = spawn(exePath, [], {
           stdio: ['pipe', 'pipe', 'pipe'],
           cwd: exeDir,
-          env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+          env: { ...process.env, PYTHONIOENCODING: 'utf-8', ...betaEnv },
         })
       }
 

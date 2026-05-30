@@ -56,6 +56,18 @@ class AgentProcess:
         self.current_stream_id: Optional[int] = None
         self._stdout_lock = threading.Lock()
 
+        # 베타 trace: env 에서 license_token + device_id 읽어 등록
+        try:
+            import os as _os_beta
+            from services.beta_trace import set_credentials
+            token = _os_beta.environ.get("INSERTYAI_LICENSE_TOKEN", "")
+            device_id = _os_beta.environ.get("INSERTYAI_DEVICE_ID", "")
+            if token:
+                set_credentials(token, device_id)
+                print(f"[AgentProcess] beta_trace creds registered (device={device_id[:8]}...)", file=sys.stderr)
+        except Exception as _e:
+            print(f"[AgentProcess] beta_trace creds failed: {_e}", file=sys.stderr)
+
         # 시작 로그
         print("[AgentProcess] Initialized", file=sys.stderr)
 
@@ -252,6 +264,28 @@ class AgentProcess:
                     messages_collected.append(text)
             else:
                 commands_count += 1
+                # 베타 trace: LLM 생성 명령 D1 기록 (applied=0 = 생성만, 적용 전)
+                try:
+                    from services.beta_trace import HwpTraceSession, _LICENSE_TOKEN, _DEVICE_ID
+                    if _LICENSE_TOKEN:
+                        # agent process 는 별도 process 라 hwp_com_process 의 session 과 분리
+                        # request_id 를 session_id 로 재사용 (LLM 호출 단위 추적)
+                        s = HwpTraceSession(_LICENSE_TOKEN, _DEVICE_ID, "", None)
+                        s.session_id = f"agent-{request_id}"
+                        s.block_cmd(
+                            command=str(cmd.action or "unknown"),
+                            target_id=str(cmd.id) if cmd.id is not None else None,
+                            args={
+                                "content_len": len(str(cmd.content or "")),
+                                "message_len": len(str(cmd.message or "")),
+                                "rows_count": len(cmd.rows) if cmd.rows else 0,
+                                **{k: v for k, v in metadata.items() if isinstance(v, (str, int, float, bool, type(None)))},
+                            },
+                            applied=0,
+                        )
+                        s.flush()
+                except Exception:
+                    pass
 
         def on_rag_search_callback(stage: str, message: str):
             """RAG 검색 상태 변경 시 호출 - Progress 이벤트 전송 (v7.2)
