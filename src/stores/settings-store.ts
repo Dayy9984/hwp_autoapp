@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import openAiModels from '../config/openai-models.json'
+import { BETA_CODEX_ONLY } from '../config/beta'
 
 export interface UsageRecord {
   id: string
@@ -104,7 +105,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   openaiApiKey: null,
   openaiDefaultModel: openAiModels.defaultModel || 'gpt-5.1',
   openaiEmbeddingModel: openAiModels.defaultEmbeddingModel || 'text-embedding-3-small',
-  connectionMode: 'api',
+  connectionMode: BETA_CODEX_ONLY ? 'codex' : 'api',
   email: null,
   promptCustomEnabled: false,
   promptCustomRules: '',
@@ -285,7 +286,9 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
       openaiEmbeddingModel: typeof settings.openai_embedding_model === 'string'
         ? settings.openai_embedding_model
         : (openAiModels.defaultEmbeddingModel || 'text-embedding-3-small'),
-      connectionMode: settings.connection_mode === 'codex' ? 'codex' as const : 'api' as const,
+      connectionMode: BETA_CODEX_ONLY
+        ? 'codex' as const
+        : (settings.connection_mode === 'codex' ? 'codex' as const : 'api' as const),
       promptCustomEnabled: typeof settings.prompt_custom_enabled === 'boolean'
         ? settings.prompt_custom_enabled
         : Boolean(settings.prompt_custom_enabled),

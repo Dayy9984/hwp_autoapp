@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useUIStore } from '../../stores/ui-store'
 import { useSettingsStore } from '../../stores/settings-store'
 import openAiModels from '../../config/openai-models.json'
+import { BETA_CODEX_ONLY } from '../../config/beta'
 import {
   Settings,
   BarChart3,
@@ -389,25 +390,35 @@ export function SettingsModal() {
                   <section>
                     <h3 className="text-sm font-semibold text-text mb-4 uppercase tracking-wider">연결 모드</h3>
                     <div className="bg-bg-secondary p-5 rounded-xl border border-transparent space-y-3">
-                      <p className="text-sm text-text-secondary">API 키 또는 Codex CLI 인증으로 연결할 수 있습니다.</p>
-                      <div className="inline-flex p-1 bg-bg rounded-xl border border-transparent">
-                        <button
-                          onClick={() => setConnectionMode('api')}
-                          className={`px-5 py-2 text-sm rounded-lg transition-colors ${connectionMode === 'api' ? 'bg-bg-secondary text-text shadow-sm font-medium' : 'text-text-tertiary hover:text-text'}`}
-                        >
-                          API Key
-                        </button>
-                        <button
-                          onClick={() => setConnectionMode('codex')}
-                          className={`px-5 py-2 text-sm rounded-lg transition-colors ${connectionMode === 'codex' ? 'bg-bg-secondary text-text shadow-sm font-medium' : 'text-text-tertiary hover:text-text'}`}
-                        >
-                          Codex CLI
-                        </button>
-                      </div>
-                      {connectionMode === 'codex' && <CodexStatusPanel />}
+                      {BETA_CODEX_ONLY ? (
+                        <>
+                          <p className="text-sm text-text-secondary">베타 기간 동안 <strong>Codex CLI 모드</strong>만 지원됩니다. ChatGPT 구독 계정으로 로그인하시면 별도 결제 없이 사용 가능합니다.</p>
+                          <CodexStatusPanel />
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-sm text-text-secondary">API 키 또는 Codex CLI 인증으로 연결할 수 있습니다.</p>
+                          <div className="inline-flex p-1 bg-bg rounded-xl border border-transparent">
+                            <button
+                              onClick={() => setConnectionMode('api')}
+                              className={`px-5 py-2 text-sm rounded-lg transition-colors ${connectionMode === 'api' ? 'bg-bg-secondary text-text shadow-sm font-medium' : 'text-text-tertiary hover:text-text'}`}
+                            >
+                              API Key
+                            </button>
+                            <button
+                              onClick={() => setConnectionMode('codex')}
+                              className={`px-5 py-2 text-sm rounded-lg transition-colors ${connectionMode === 'codex' ? 'bg-bg-secondary text-text shadow-sm font-medium' : 'text-text-tertiary hover:text-text'}`}
+                            >
+                              Codex CLI
+                            </button>
+                          </div>
+                          {connectionMode === 'codex' && <CodexStatusPanel />}
+                        </>
+                      )}
                     </div>
                   </section>
 
+                  {!BETA_CODEX_ONLY && (
                   <section>
                     <h3 className="text-sm font-semibold text-text mb-4 uppercase tracking-wider">OpenAI API Key</h3>
                     <div className="bg-bg-secondary p-5 rounded-xl border border-transparent space-y-4">
@@ -450,7 +461,9 @@ export function SettingsModal() {
                       </div>
                     </div>
                   </section>
+                  )}
 
+                  {!BETA_CODEX_ONLY && (
                   <section>
                     <h3 className="text-sm font-semibold text-text mb-4 uppercase tracking-wider">모델 선택</h3>
                     <div className="inline-flex p-1 bg-bg-secondary rounded-xl border border-transparent">
@@ -521,6 +534,7 @@ export function SettingsModal() {
                       })}
                     </div>
                   </section>
+                  )}
                 </div>
               )}
 

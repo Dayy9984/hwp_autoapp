@@ -1,4 +1,18 @@
-﻿// 개발 모드에서 .env 로드 (다른 import보다 먼저 실행)
+﻿// ─── EPIPE / stdio broken pipe 안전 가드 ──────────────────────────────────────
+// Windows GUI subsystem + NSIS oneClick(runAfterFinish:true) 로 설치 직후 앱이
+// detached 로 spawn 되는데, console.log 가 받는 stdout 이 inherited pipe 일 때
+// 인스톨러 종료와 동시에 broken pipe 가 되어 EPIPE 가 다이얼로그로 노출됨.
+// stdio error listener + EPIPE uncaughtException 둘 다 가드.
+for (const stream of [process.stdout, process.stderr]) {
+  try { (stream as any)?.on?.('error', () => {}) } catch {}
+}
+process.on('uncaughtException', (err: any) => {
+  if (err?.code === 'EPIPE') return
+  // EPIPE 가 아니면 Electron 기본 동작 (다이얼로그) 유지 — 다른 버그는 가리지 않음.
+  throw err
+})
+
+// 개발 모드에서 .env 로드 (다른 import보다 먼저 실행)
 // .env에는 공개 키 + 시크릿 키가 모두 포함됨
 // 프로덕션 빌드에서는 inject-env.cjs가 빌드 시점에 값을 인라인하므로
 // dotenv 로딩은 무시됨 (파일 없으면 무시)
@@ -67,6 +81,7 @@ import { registerLogHandlers } from './log-handlers'
 import { registerLicenseHandlers, initialLicenseCheck, getLastStatus } from './license-gate'
 import { getLogService } from '../services/log-service'
 import { dbManager } from '../services/db-manager'
+import { telemetry } from '../services/telemetry'
 
 
 
@@ -1833,10 +1848,24 @@ app.whenReady().then(async () => {
   registerLifecycleGuards()
   registerLicenseHandlers()
 
+  // 베타 텔레메트리 큐 시작 + app_launched 기록
+  telemetry.init()
+  telemetry.push('app_launched', { ts: Date.now() })
+  ipcMain.handle('telemetry:track', (_, eventType: string, payload?: Record<string, unknown>) => {
+    telemetry.push(eventType, payload)
+    return { ok: true }
+  })
+
   // 라이센스 초기 검증 — pending key 자동 활성화 + 캐시 토큰 검증
-  // 결과는 렌더러가 license:getInitialStatus IPC로 가져감
-  await initialLicenseCheck()
+  // BrowserWindow 생성 전에 결과가 결정되어야 렌더러가 getInitialStatus 호출 시
+  // 올바른 상태를 받는다. 네트워크 실패 시에도 verify()가 빠르게 offline_grace/blocked를
+  // 반환하므로 무한 대기는 없음.
   ipcMain.handle('license:getInitialStatus', () => getLastStatus())
+  try {
+    await initialLicenseCheck()
+  } catch (e) {
+    console.error('[License] initial check error:', e)
+  }
 
   // 1. 스플래시 윈도우 먼저 생성 (즉시 표시)
   try {
@@ -1881,17 +1910,19 @@ app.whenReady().then(async () => {
 
 
 app.on('window-all-closed', () => {
-
-
+  // 업데이트 진행 중에는 모든 창이 닫혀도 app.quit 안 함.
+  // (progress window 만 띄우려고 메인 창을 닫는 순간 quit 되면 안 되므로)
+  // quitAndInstall 호출 시점에 명시적으로 종료됨.
+  try {
+    const { isUpdatingNow } = require('./update-handlers')
+    if (isUpdatingNow && isUpdatingNow()) {
+      win = null
+      return
+    }
+  } catch {}
 
   win = null
-
-
-
   app.quit()
-
-
-
 })
 
 

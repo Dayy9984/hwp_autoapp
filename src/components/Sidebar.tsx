@@ -7,6 +7,7 @@ import { useFlipList } from '../hooks/useFlipList'
 import { clearChatDragData, getChatDragData, hasChatDragData, setChatDragData } from '../utils/chat-dnd'
 import { FolderList } from './FolderList'
 import { ToolsTab } from './ToolsTab'
+import { BetaCountdown } from './BetaCountdown'
 import {
   PanelLeftClose,
   PanelLeftOpen,
@@ -14,8 +15,12 @@ import {
   Search,
   MoreVertical, // Modified: Changed from MoreHorizontal to MoreVertical
   Settings,
-  Plus
+  Plus,
+  Lightbulb,
+  Bug,
 } from 'lucide-react'
+import { useBetaSurveyStore } from '../stores/beta-survey-store'
+import { IS_BETA } from '../config/beta'
 
 type TabType = 'chat' | 'tools'
 
@@ -375,6 +380,31 @@ export function Sidebar() {
           <ToolsTab isCollapsed={isCollapsed} />
         )}
       </div>
+
+      {/* 베타 카운트다운 — Settings 위에 작게 */}
+      <BetaCountdown compact={isCollapsed} />
+
+      {/* 베타 피드백 메뉴 — 기능 요청 / 버그 신고 */}
+      {IS_BETA && (
+        <div className="flex-shrink-0 px-3 pb-1 space-y-0.5">
+          <button
+            onClick={() => useBetaSurveyStore.getState().openModal('feature_request', '어떤 기능이 있으면 좋을까요?')}
+            aria-label="기능 요청"
+            className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg transition-all hover:bg-sidebar-hover group text-text-tertiary hover:text-text ${isCollapsed ? 'justify-center' : ''}`}
+          >
+            <Lightbulb size={15} />
+            {!isCollapsed && <span className="text-xs">기능 요청</span>}
+          </button>
+          <button
+            onClick={() => useBetaSurveyStore.getState().openModal('bug_report', '어떤 문제가 발생했나요?')}
+            aria-label="버그 신고"
+            className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg transition-all hover:bg-sidebar-hover group text-text-tertiary hover:text-text ${isCollapsed ? 'justify-center' : ''}`}
+          >
+            <Bug size={15} />
+            {!isCollapsed && <span className="text-xs">버그 신고</span>}
+          </button>
+        </div>
+      )}
 
       {/* 4. Settings */}
       <div className="flex-shrink-0 p-3 border-t bg-sidebar-bg" style={{ borderColor: 'var(--border)' }}>

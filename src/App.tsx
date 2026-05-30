@@ -8,6 +8,9 @@ import { ChatSearchModal } from './components/modals/ChatSearchModal'
 import { CreateFolderModal } from './components/modals/CreateFolderModal'
 import { AddFolderFileModal } from './components/modals/AddFolderFileModal'
 import { SettingsModal } from './components/modals/SettingsModal'
+import { TallyEmbedModal } from './components/modals/TallyEmbedModal'
+import { useBetaSurveyStore } from './stores/beta-survey-store'
+import { IS_BETA } from './config/beta'
 import { NotificationModal, Notification } from './components/modals/NotificationModal'
 import { SignatureToolModal } from './components/modals/SignatureToolModal'
 import { ToolEditModal } from './components/modals/ToolEditModal'
@@ -31,6 +34,13 @@ import { useToolStore } from './stores/tool-store'
 import { getProjectChatOrder, loadChatOrderSettings } from './utils/chat-order-storage'
 import './dev-utils/test-data' // Import dev utilities for browser console access
 import { LicenseGate, LicenseState } from './components/LicenseGate'
+import { UpdateProgressModal } from './components/modals/UpdateProgressModal'
+
+// 진행률 전용 창인지 판별 (main process 가 hash=#update-progress 로 띄움).
+function isUpdateProgressRoute(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.location.hash === '#update-progress'
+}
 
 // 알림 우선순위 (높을수록 중요 - 낮은 우선순위 알림이 높은 우선순위를 덮어쓸 수 없음)
 const NOTIFICATION_PRIORITY: Record<string, number> = {
@@ -41,13 +51,42 @@ const NOTIFICATION_PRIORITY: Record<string, number> = {
 // bridge 응답 + 캐시 키를 LicenseGate state로 정규화 (license_key는 캐시에서 보충)
 function mapLicenseStatus(raw: any, cachedKey: string | null): LicenseState {
   if (!raw) return { state: 'no_license' }
-  if (['expired', 'leaked', 'revoked'].includes(raw.state)) {
+  if (['expired', 'leaked', 'revoked', 'device_limit_reached'].includes(raw.state)) {
     return { ...raw, license_key: cachedKey }
   }
   return raw
 }
 
+// 업데이트 진행률 전용 윈도우 렌더링 — main process 가 BrowserWindow 를 열 때
+// hash=#update-progress 로 indexHtml 을 로드. 이 경우 다른 UI 는 다 빼고 진행률만 보여줌.
+function UpdateProgressApp() {
+  // 진행률 모달이 자체적으로 downloaded 이벤트 받으면 자동 install 트리거.
+  return (
+    <UpdateProgressModal
+      open
+      onClose={() => { /* 사용자가 닫을 수 없음 — 자동 진행 */ }}
+    />
+  )
+}
+
+// 베타 설문 모달 마운트 — store 가 currentModal 을 채우면 자동 노출.
+function BetaSurveyMount() {
+  const currentModal = useBetaSurveyStore((s) => s.currentModal)
+  const closeModal = useBetaSurveyStore((s) => s.closeModal)
+  if (!currentModal) return null
+  return (
+    <TallyEmbedModal
+      formKey={currentModal.formKey}
+      title={currentModal.title}
+      onClose={closeModal}
+    />
+  )
+}
+
 function App() {
+  // 업데이트 진행률 전용 창이면 메인 UI / 라이센스 / Python 전부 건너뜀.
+  if (isUpdateProgressRoute()) return <UpdateProgressApp />
+
   const [licenseStatus, setLicenseStatus] = useState<LicenseState>({ state: 'loading' })
   const [showSplash, setShowSplash] = useState(true)
   const [pythonReady, setPythonReady] = useState(false)
@@ -156,48 +195,25 @@ function App() {
     const unsubscribe = api.update.onStatus((status) => {
       console.log('[App] Update status:', status.status, status.info?.version ?? '', status.isCritical ? '(CRITICAL)' : '')
 
+      // 'available' 시점에 알림 표시. 클릭하면 startInstallFlow 가:
+      //   1) 메인 창 닫음
+      //   2) 별도 progress window 띄움
+      //   3) 다운로드 시작 → 진행률 표시 → 자동 설치 → 새 앱 실행
+      // 단일 흐름.
       if (status.status === 'available' && status.info) {
         const isCritical = status.isCritical ?? false
         const releaseNotes = status.releaseNotes ?? ''
-
-        // 필수 업데이트 vs 일반 업데이트 알림
         const title = isCritical ? '필수 업데이트' : '새 버전 사용 가능'
         const content = isCritical
           ? `중요한 업데이트가 있습니다.\n버전 ${status.info.version}(으)로 업데이트해야 합니다.${releaseNotes ? `\n\n${releaseNotes}` : ''}`
-          : `새 버전 ${status.info.version}이(가) 출시되었습니다.\n지금 다운로드하시겠습니까?${releaseNotes ? `\n\n${releaseNotes}` : ''}`
-
+          : `새 버전 ${status.info.version}이(가) 출시되었습니다.\n지금 업데이트하시겠습니까?${releaseNotes ? `\n\n${releaseNotes}` : ''}`
         showNotification({
           id: `update-available-${status.info.version}`,
           type: isCritical ? 'critical-update' : 'version-update',
           title,
           content,
-          actionLabel: '다운로드',
-          isCritical  // 필수 업데이트 플래그 전달
-        })
-      } else if (status.status === 'downloading') {
-        // download-progress 이벤트 — info 없음, progress.percent만 있음
-        // 첫 progress 이벤트 시 "다운로드 중" 알림으로 교체 (다운로드 시작 피드백)
-        if (status.progress && status.progress.percent < 5) {
-          showNotification({
-            id: 'update-downloading',
-            type: 'version-update',
-            title: '업데이트 다운로드 중...',
-            content: `백그라운드에서 다운로드 중입니다.\n완료되면 재시작 알림이 표시됩니다.`,
-          })
-        }
-      } else if (status.status === 'downloaded' && status.info) {
-        const isCritical = status.isCritical ?? false
-
-        // 다운로드 완료 알림
-        showNotification({
-          id: `update-downloaded-${status.info.version}`,
-          type: isCritical ? 'critical-update' : 'version-update',
-          title: isCritical ? '필수 업데이트 준비 완료' : '업데이트 준비 완료',
-          content: isCritical
-            ? `필수 업데이트가 준비되었습니다.\n지금 재시작하여 업데이트를 적용해야 합니다.`
-            : `새 버전 ${status.info.version} 다운로드가 완료되었습니다.\n지금 재시작하여 업데이트를 적용하시겠습니까?`,
-          actionLabel: '재시작',
-          isCritical
+          actionLabel: '업데이트',
+          isCritical,
         })
       }
     })
@@ -208,36 +224,21 @@ function App() {
         if (result?.success && result.status) {
           console.log('[App] Recovering missed update status:', result.status.status)
           // 이미 리스너로 처리된 상태가 아닌 경우에만 처리
-          if (result.status.status === 'available' || result.status.status === 'downloaded') {
-            // 리스너 콜백과 동일한 로직을 직접 트리거
+          if (result.status.status === 'available') {
             const recoveredStatus = result.status
-            if (recoveredStatus.status === 'available' && recoveredStatus.info) {
+            if (recoveredStatus.info) {
               const isCritical = recoveredStatus.isCritical ?? false
               const releaseNotes = recoveredStatus.releaseNotes ?? ''
               const title = isCritical ? '필수 업데이트' : '새 버전 사용 가능'
               const content = isCritical
                 ? `중요한 업데이트가 있습니다.\n버전 ${recoveredStatus.info.version}(으)로 업데이트해야 합니다.${releaseNotes ? `\n\n${releaseNotes}` : ''}`
-                : `새 버전 ${recoveredStatus.info.version}이(가) 출시되었습니다.\n지금 다운로드하시겠습니까?${releaseNotes ? `\n\n${releaseNotes}` : ''}`
-
+                : `새 버전 ${recoveredStatus.info.version}이(가) 출시되었습니다.\n지금 업데이트하시겠습니까?${releaseNotes ? `\n\n${releaseNotes}` : ''}`
               showNotification({
                 id: `update-available-${recoveredStatus.info.version}`,
                 type: isCritical ? 'critical-update' : 'version-update',
-                title,
-                content,
-                actionLabel: '다운로드',
-                isCritical
-              })
-            } else if (recoveredStatus.status === 'downloaded' && recoveredStatus.info) {
-              const isCritical = recoveredStatus.isCritical ?? false
-              showNotification({
-                id: `update-downloaded-${recoveredStatus.info.version}`,
-                type: isCritical ? 'critical-update' : 'version-update',
-                title: isCritical ? '필수 업데이트 준비 완료' : '업데이트 준비 완료',
-                content: isCritical
-                  ? `필수 업데이트가 준비되었습니다.\n지금 재시작하여 업데이트를 적용해야 합니다.`
-                  : `새 버전 ${recoveredStatus.info.version} 다운로드가 완료되었습니다.\n지금 재시작하여 업데이트를 적용하시겠습니까?`,
-                actionLabel: '재시작',
-                isCritical
+                title, content,
+                actionLabel: '업데이트',
+                isCritical,
               })
             }
           }
@@ -452,7 +453,10 @@ function App() {
     if (!api) return
     const raw = await api.activate(key)
     const cachedKey = await api.getCachedKey()
-    setLicenseStatus(mapLicenseStatus(raw, cachedKey))
+    // 신규 expired/leaked/revoked 활성화 시도는 cache 가 없어 license_key 가 안 보임.
+    // 사용자가 카카오 문의 시 "내가 입력한 키" 를 알 수 있도록 입력 키를 fallback.
+    const displayKey = cachedKey || key.trim().toUpperCase()
+    setLicenseStatus(mapLicenseStatus(raw, displayKey))
   }, [])
 
   const handleLicenseRetry = useCallback(async () => {
@@ -519,6 +523,7 @@ function App() {
         <CreateFolderModal />
         <AddFolderFileModal />
         <SettingsModal />
+        {IS_BETA && <BetaSurveyMount />}
         <NotificationModal
           notification={notification}
           onClose={clearNotification}
@@ -536,21 +541,16 @@ function App() {
             const api = typeof window !== 'undefined' ? window.electronAPI : undefined
             if (!api) return
 
-            // electron-updater: 다운로드 시작 (update-available 알림)
+            // 업데이트 알림 → 메인 창 닫고 별도 progress 창 열기 + 다운로드 시작.
+            // downloaded 이벤트 시 progress 창이 자동으로 install 트리거 → 추가 클릭 없이 완료.
             if (item.id.startsWith('update-available-') || item.id.startsWith('version-update-')) {
-              if (api.update?.download) {
-                const result = await api.update.download()
-                if (!result?.success) {
-                  console.error('[App] Update download failed:', result?.error)
-                }
-              }
-              return
-            }
-
-            // electron-updater: 설치 및 재시작 (update-downloaded 알림)
-            if (item.id.startsWith('update-downloaded-')) {
-              if (api.update?.install) {
-                await api.update.install()
+              const startFlow = (api.update as any)?.startInstallFlow
+              if (typeof startFlow === 'function') {
+                const r = await startFlow()
+                if (!r?.success) console.error('[App] startInstallFlow failed:', r?.error)
+              } else if (api.update?.download) {
+                // 폴백 — 구 빌드 호환
+                await api.update.download()
               }
               return
             }

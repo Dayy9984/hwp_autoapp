@@ -103,6 +103,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     check: () => ipcRenderer.invoke('update:check'),
     download: () => ipcRenderer.invoke('update:download'),
     install: () => ipcRenderer.invoke('update:install'),
+    startInstallFlow: () => ipcRenderer.invoke('update:startInstallFlow'),
     getCurrentVersion: () => ipcRenderer.invoke('update:getCurrentVersion'),
     startPeriodicCheck: (intervalMs?: number) => ipcRenderer.invoke('update:startPeriodicCheck', intervalMs),
     stopPeriodicCheck: () => ipcRenderer.invoke('update:stopPeriodicCheck'),
@@ -324,6 +325,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getCachedKey: () => ipcRenderer.invoke('license:getCachedKey'),
     tryPendingKey: () => ipcRenderer.invoke('license:tryPendingKey'),
     openExternal: (url: string) => ipcRenderer.invoke('license:openExternal', url),
+    listDevices: () => ipcRenderer.invoke('license:listDevices'),
+    removeDevice: (targetDeviceId: string) =>
+      ipcRenderer.invoke('license:removeDevice', targetDeviceId),
+    retryActivate: () => ipcRenderer.invoke('license:retryActivate'),
+  },
+
+  telemetry: {
+    track: (eventType: string, payload?: Record<string, unknown>) =>
+      ipcRenderer.invoke('telemetry:track', eventType, payload),
   },
 })
 
