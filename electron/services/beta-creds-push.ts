@@ -6,6 +6,7 @@
 
 import { app } from 'electron'
 import { getPythonBridge } from './python-bridge'
+import { getAgentBridge } from './agent-bridge'
 import { licenseBridge } from './license-bridge'
 import { getDeviceInfo } from './license-device-id'
 
@@ -18,9 +19,16 @@ export async function pushBetaCredsNow(): Promise<void> {
     const token = (licenseBridge as any).pickAuthToken?.() as string | null
     if (!token) return
     const deviceId = getDeviceInfo().device_id
-    const bridge: any = getPythonBridge(app.getAppPath())
-    if (!bridge) return
-    await bridge.call('beta:set_creds', { token, device_id: deviceId }).catch(() => {})
+    const payload = { token, device_id: deviceId }
+    // hwp_com_process (PythonBridge) + agent_process (AgentBridge) 둘 다 별개 Python process — 각각 푸시.
+    const hwpBridge: any = getPythonBridge(app.getAppPath())
+    if (hwpBridge) {
+      await hwpBridge.call('beta:set_creds', payload).catch(() => {})
+    }
+    const agentBridge: any = getAgentBridge(app.getAppPath())
+    if (agentBridge) {
+      await agentBridge.call('beta:set_creds', payload).catch(() => {})
+    }
   } catch {
     // silent — telemetry 보조 기능이라 본 흐름 영향 X
   }

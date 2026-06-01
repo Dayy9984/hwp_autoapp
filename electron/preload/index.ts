@@ -202,6 +202,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // Undo/Redo 및 Diff 모드 (TASK-006)
+  tally: {
+    clearStorage: () => ipcRenderer.invoke('tally:clearStorage'),
+  },
   edit: {
     undo: (count?: number) => ipcRenderer.invoke('edit:undo', count),
     redo: (count?: number) => ipcRenderer.invoke('edit:redo', count),
@@ -321,6 +324,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   license: {
     activate: (key: string) => ipcRenderer.invoke('license:activate', key),
     verify: () => ipcRenderer.invoke('license:verify'),
+    // Frontend 가 API LICENSE_* 에러 catch 시 강제 verify 트리거하는 별칭.
+    // 의미상 verify 와 동일 (main 에서 같은 핸들러 사용) — 호출 위치 의도를 명확히 함.
+    forceReverify: () => ipcRenderer.invoke('license:verify'),
     getInitialStatus: () => ipcRenderer.invoke('license:getInitialStatus'),
     getCachedKey: () => ipcRenderer.invoke('license:getCachedKey'),
     tryPendingKey: () => ipcRenderer.invoke('license:tryPendingKey'),
@@ -329,6 +335,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     removeDevice: (targetDeviceId: string) =>
       ipcRenderer.invoke('license:removeDevice', targetDeviceId),
     retryActivate: () => ipcRenderer.invoke('license:retryActivate'),
+    // main 측 lastStatus 가 갱신될 때마다 발생. App.tsx 가 구독해 LicenseGate 즉시 갱신.
+    onStatusChanged: (callback: (status: any) => void) => {
+      const sub = (_e: any, status: any) => callback(status)
+      ipcRenderer.on('license:statusChanged', sub)
+      return () => ipcRenderer.removeListener('license:statusChanged', sub)
+    },
   },
 
   telemetry: {
@@ -340,6 +352,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     list: () => ipcRenderer.invoke('announcements:list'),
     dismiss: (id: string) => ipcRenderer.invoke('announcements:dismiss', id),
     refresh: () => ipcRenderer.invoke('announcements:refresh'),
+    // 신규 알림 도착 시 main 이 push — renderer 가 자동 모달 노출.
+    onNew: (callback: (announcement: any) => void) => {
+      const sub = (_e: any, a: any) => callback(a)
+      ipcRenderer.on('announcement:new', sub)
+      return () => ipcRenderer.removeListener('announcement:new', sub)
+    },
   },
 })
 

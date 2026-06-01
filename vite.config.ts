@@ -56,6 +56,11 @@ export default defineConfig(({ command, mode }) => {
 
   const mainEnvDefine: Record<string, string> = {
     'process.env.UPDATE_FEED_URL': JSON.stringify(env.UPDATE_FEED_URL ?? ''),
+    'process.env.INSERTYAI_SUPABASE_ANON_KEY': JSON.stringify(env.INSERTYAI_SUPABASE_ANON_KEY ?? ''),
+    // ★ INSERTYAI_UPDATE_TOKEN inject 영구 제거 (보안). auto-update 는 Worker proxy 사용.
+    // Worker: inserty-beta-admin/worker/src/auto-update.ts
+    // Client config: electron/services/auto-update-service.ts (UPDATE_FEED_URL 상수)
+    //                + electron-builder.json (publish.url)
   }
 
   return {
@@ -146,13 +151,21 @@ export default defineConfig(({ command, mode }) => {
         renderer: {},
       }),
     ],
-    server: process.env.VSCODE_DEBUG && (() => {
+    server: process.env.VSCODE_DEBUG ? (() => {
       const url = new URL(pkg.debug.env.VITE_DEV_SERVER_URL)
       return {
         host: url.hostname,
         port: +url.port,
+        watch: {
+          ignored: ['**/python/.venv/**', '**/python/dist/**', '**/release/**', '**/dist-electron/**', '**/node_modules/**'],
+        },
       }
-    })(),
+    })() : {
+      watch: {
+        // Python venv 안 수백 개 파일 watch 시 무한 reload — 제외 필수.
+        ignored: ['**/python/.venv/**', '**/python/dist/**', '**/release/**', '**/dist-electron/**', '**/node_modules/**'],
+      },
+    },
     clearScreen: false,
   }
 })

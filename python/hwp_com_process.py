@@ -3613,6 +3613,38 @@ class DocumentProcessor:
             connector = self._ensure_connector()
             hwp = connector.hwp
 
+            # 베타 trace: chat 사이클 시작 — 매번 새 session (이전 session 은 flush + 종료).
+            # session ID = 한 chat 사이클 단위로 D1 / R2 에 매핑.
+            try:
+                from services.beta_trace import get_session, start_session, end_session
+                # 이전 사이클이 비정상 종료된 경우 대비 — 잔존 session flush + 종료
+                prev = get_session()
+                if prev:
+                    try: prev.flush()
+                    except Exception: pass
+                end_session()
+                # 새 사이클 session 시작
+                active_path: Optional[str] = None
+                try:
+                    xdocs = hwp.XHwpDocuments
+                    active_doc = xdocs.Active_XHwpDocument
+                    full = getattr(active_doc, "FullName", "") if active_doc else ""
+                    active_path = full if isinstance(full, str) and full else None
+                except Exception:
+                    active_path = None
+                if not active_path and self._current_file:
+                    active_path = self._current_file
+                if active_path:
+                    s = start_session(active_path)
+                    if s:
+                        try:
+                            import os as _os
+                            s.extract("cycle_start", doc_size_kb=int(_os.path.getsize(active_path) / 1024))
+                        except Exception:
+                            pass
+            except Exception as e:
+                print(f"[beta_trace] prepare_context hook failed: {e}", file=sys.stderr)
+
             # 문서 인덱스가 있으면 활성화
             doc_index_value = self._coerce_int(doc_index)
             if doc_index_value is not None:
@@ -5851,6 +5883,19 @@ class DocumentProcessor:
         finally:
             self._active_context_id = None
             self._cleanup_session_state()
+            # 베타 trace: chat 사이클 종료 — 큐 flush + 세션 종료.
+            # CVD/block_cmd 등 사이클 도중 누적된 trace 가 이 시점에 Worker 로 일괄 전송됨.
+            try:
+                from services.beta_trace import get_session, end_session
+                s = get_session()
+                if s:
+                    try: s.extract("cycle_end", duration_ms=None)
+                    except Exception: pass
+                    try: s.flush()
+                    except Exception: pass
+                end_session()
+            except Exception as e:
+                print(f"[beta_trace] finalize_edits hook failed: {e}", file=sys.stderr)
 
     def cancel_context(self, context_id: Optional[str] = None) -> dict:
         """현재 편집 컨텍스트를 무효화 (취소 시 사용)"""

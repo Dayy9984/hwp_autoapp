@@ -3,16 +3,6 @@
   "appId": "com.inserty.ai",
   "productName": "Inserty AI",
   "asar": true,
-  "electronFuses": {
-    "runAsNode": false,
-    "enableCookieEncryption": true,
-    "enableNodeOptionsEnvironmentVariable": false,
-    "enableNodeCliInspectArguments": false,
-    "enableEmbeddedAsarIntegrityValidation": true,
-    "onlyLoadAppFromAsar": true,
-    "loadBrowserProcessSpecificV8Snapshot": false,
-    "grantFileProtocolExtraPrivileges": false
-  },
   "directories": {
     "output": "release/${version}"
   },
@@ -74,10 +64,8 @@
     "include": "build/installer.nsh"
   },
   "publish": {
-    "provider": "github",
-    "owner": "OpenScoutAI",
-    "repo": "insertyai-beta",
-    "private": true,
-    "releaseType": "release"
+    "provider": "generic",
+    "url": "https://inserty-beta-worker.snsoffice.workers.dev/auto-update/",
+    "channel": "latest"
   }
 }

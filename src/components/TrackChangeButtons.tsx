@@ -140,9 +140,17 @@ export function TrackChangeButtons({ isEmbedded = false }: TrackChangeButtonsPro
     return undefined
   }
 
-  // diffModeEnabled가 false가 되면 상태 리셋
+  // diffModeEnabled 가 true → false 로 "실제 전환" 될 때만 리셋.
+  // mount 시 첫 effect fire 에서 diffModeEnabled 가 잠깐 false (store hydrate 직전) 였다가
+  // true 로 안정화되면 reset 이 잘못 발사되어 pending 도 휘발 → 버튼이 깜빡 사라지는 race 방지.
+  const prevDiffModeRef = useRef<boolean | null>(null)
   useEffect(() => {
-    if (!diffModeEnabled) {
+    const prev = prevDiffModeRef.current
+    prevDiffModeRef.current = diffModeEnabled
+    // 최초 mount 시 skip (prev === null)
+    if (prev === null) return
+    // 실제 true → false 전환일 때만 reset
+    if (prev === true && diffModeEnabled === false) {
       reset()
     }
   }, [diffModeEnabled, reset])
@@ -258,9 +266,10 @@ export function TrackChangeButtons({ isEmbedded = false }: TrackChangeButtonsPro
       const result = await window.electronAPI.trackChanges.applySelected()
       console.log('[TrackChangeButtons] ApplySelected result:', result)
 
+      // 부분(선택) 승인은 telemetry 만 보내고 피드백 toast 는 띄우지 않음
+      // (사용자 작업 중간 흐름 방해 X).
       if (IS_BETA && !result?.showToast) {
         track('delta_accepted', { mode: 'selected' })
-        useBetaSurveyStore.getState().recordAccept()
       }
 
       if (result.showToast) {
@@ -289,9 +298,9 @@ export function TrackChangeButtons({ isEmbedded = false }: TrackChangeButtonsPro
         return
       }
 
+      // 부분(선택) 거절도 telemetry 만, 피드백 toast 는 띄우지 않음.
       if (IS_BETA && result.fact?.success) {
         track('delta_rejected', { mode: 'selected' })
-        useBetaSurveyStore.getState().recordReject()
       }
 
       if (result.showToast) {

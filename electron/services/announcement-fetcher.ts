@@ -5,7 +5,7 @@
 //   2. 사용자가 dismiss 한 id 는 disk 캐시에 저장
 //   3. renderer 가 IPC announcement:list 호출 → dismiss 안 된 것만 반환
 
-import { app, ipcMain } from 'electron'
+import { app, ipcMain, BrowserWindow } from 'electron'
 import * as fs from 'fs'
 import * as path from 'path'
 import { licenseBridge } from './license-bridge'
@@ -32,13 +32,24 @@ class AnnouncementFetcher {
   private dismissed: Set<string> = new Set()
   private dismissedPath = ''
   private timer: NodeJS.Timeout | null = null
+  // 사용자가 한번이라도 본 (dismiss 안 했어도 사용자가 알림 popover 를 연 적이 있는) id.
+  // 같은 알림이 매 fetch 마다 모달로 반복 표시되는 것 방지.
+  private notifiedSet: Set<string> = new Set()
+  private notifiedPath = ''
 
   init() {
     this.dismissedPath = path.join(app.getPath('userData'), 'announcement-dismissed.json')
+    this.notifiedPath = path.join(app.getPath('userData'), 'announcement-notified.json')
     try {
       if (fs.existsSync(this.dismissedPath)) {
         const arr = JSON.parse(fs.readFileSync(this.dismissedPath, 'utf8')) as string[]
         this.dismissed = new Set(Array.isArray(arr) ? arr : [])
+      }
+    } catch {}
+    try {
+      if (fs.existsSync(this.notifiedPath)) {
+        const arr = JSON.parse(fs.readFileSync(this.notifiedPath, 'utf8')) as string[]
+        this.notifiedSet = new Set(Array.isArray(arr) ? arr : [])
       }
     } catch {}
     this.fetchNow().catch(() => {})
@@ -68,10 +79,31 @@ class AnnouncementFetcher {
       if (Array.isArray(data.items)) {
         this.items = data.items
         console.log(`[announcement-fetcher] fetched ${data.items.length} items`)
+        // 신규 알림 자동 노출: 한 번도 본 적 없는 & dismiss 안 한 & 활성 기간 내인 알림 중 최우선 1건.
+        this.maybeNotifyNew()
       }
     } catch (e) {
       console.log('[announcement-fetcher] exception:', (e as Error).message)
     }
+  }
+
+  private maybeNotifyNew(): void {
+    const now = Date.now()
+    const candidates = this.items
+      .filter((a) => !this.dismissed.has(a.id))
+      .filter((a) => !this.notifiedSet.has(a.id))
+      .filter((a) => !a.starts_at || a.starts_at <= now)
+      .filter((a) => !a.ends_at || a.ends_at >= now)
+      .sort((a, b) => (b.priority || 0) - (a.priority || 0))
+    if (candidates.length === 0) return
+    const a = candidates[0]
+    // renderer 에 'announcement:new' 이벤트 송신 — 자동 모달 노출 트리거.
+    const wins = BrowserWindow.getAllWindows()
+    for (const w of wins) {
+      try { w.webContents.send('announcement:new', a) } catch {}
+    }
+    this.notifiedSet.add(a.id)
+    try { fs.writeFileSync(this.notifiedPath, JSON.stringify(Array.from(this.notifiedSet))) } catch {}
   }
 
   list(): Announcement[] {

@@ -22,6 +22,8 @@ log = logging.getLogger(__name__)
 WORKER_BASE = "https://inserty-beta-worker.snsoffice.workers.dev"
 UPLOAD_TIMEOUT_S = 30
 TRACE_TIMEOUT_S = 5
+# Cloudflare WAF 가 기본 Python-urllib UA 차단 (error 1010) — 앱 식별 UA 사용.
+USER_AGENT = "InsertyAI-Beta/0.1.9 (Windows; Python-urllib)"
 
 # ─── module-level state ─────────────────────────────────────
 # Electron 이 'beta:set_creds' RPC 로 채워줌. 토큰 갱신 시 같은 RPC 로 재호출.
@@ -110,6 +112,7 @@ def upload_hwp_async(path: str, license_token: str, device_id: str, doc_hash: st
             "Authorization": f"Bearer {license_token}",
             "X-Device-Id": device_id or "",
             "Content-Type": "application/octet-stream",
+            "User-Agent": USER_AGENT,
         }
         _post_async(url, body, headers, UPLOAD_TIMEOUT_S)
     except OSError as e:
@@ -127,6 +130,7 @@ def send_trace(events: list[dict[str, Any]], license_token: str, device_id: str)
             "Authorization": f"Bearer {license_token}",
             "X-Device-Id": device_id or "",
             "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
         }
         _post_async(url, body, headers, TRACE_TIMEOUT_S)
     except (TypeError, ValueError) as e:

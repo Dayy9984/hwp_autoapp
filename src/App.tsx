@@ -8,10 +8,9 @@ import { ChatSearchModal } from './components/modals/ChatSearchModal'
 import { CreateFolderModal } from './components/modals/CreateFolderModal'
 import { AddFolderFileModal } from './components/modals/AddFolderFileModal'
 import { SettingsModal } from './components/modals/SettingsModal'
-import { TallyEmbedModal } from './components/modals/TallyEmbedModal'
-import { useBetaSurveyStore } from './stores/beta-survey-store'
+import { BetaFeedbackModal } from './components/BetaFeedbackToast'
+import { CodexAuthBanner } from './components/CodexAuthBanner'
 import { IS_BETA, BETA_CODEX_ONLY } from './config/beta'
-import { CodexAutoSetup } from './components/CodexAutoSetup'
 import { NotificationModal, Notification } from './components/modals/NotificationModal'
 import { SignatureToolModal } from './components/modals/SignatureToolModal'
 import { ToolEditModal } from './components/modals/ToolEditModal'
@@ -66,20 +65,6 @@ function UpdateProgressApp() {
     <UpdateProgressModal
       open
       onClose={() => { /* 사용자가 닫을 수 없음 — 자동 진행 */ }}
-    />
-  )
-}
-
-// 베타 설문 모달 마운트 — store 가 currentModal 을 채우면 자동 노출.
-function BetaSurveyMount() {
-  const currentModal = useBetaSurveyStore((s) => s.currentModal)
-  const closeModal = useBetaSurveyStore((s) => s.closeModal)
-  if (!currentModal) return null
-  return (
-    <TallyEmbedModal
-      formKey={currentModal.formKey}
-      title={currentModal.title}
-      onClose={closeModal}
     />
   )
 }
@@ -431,6 +416,8 @@ function App() {
   }, [isAuthenticated, clearDocumentState])
 
   // 라이센스 게이트 — 앱 시작 시 초기 상태 가져오고 24h heartbeat 등록
+  // + main 의 license:statusChanged 이벤트 구독 (IPC 가드가 throw 한 경우,
+  //   verify 가 새 상태 받은 경우 등 ok→차단 전이를 즉시 UI 에 반영).
   useEffect(() => {
     const api = (window as any).electronAPI?.license
     if (!api) return
@@ -446,7 +433,21 @@ function App() {
       const cachedKey = await api.getCachedKey()
       if (!cancelled) setLicenseStatus(mapLicenseStatus(raw, cachedKey))
     }, 24 * 3600 * 1000)
-    return () => { cancelled = true; clearInterval(interval) }
+
+    // main 측 lastStatus 가 갱신될 때마다 push — verify / activate / 가드 throw 후 등.
+    let unsubscribe: (() => void) | undefined
+    if (typeof api.onStatusChanged === 'function') {
+      unsubscribe = api.onStatusChanged(async (raw: any) => {
+        if (cancelled) return
+        const cachedKey = await api.getCachedKey()
+        setLicenseStatus(mapLicenseStatus(raw, cachedKey))
+      })
+    }
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+      try { unsubscribe?.() } catch {}
+    }
   }, [])
 
   const handleLicenseActivate = useCallback(async (key: string) => {
@@ -524,8 +525,8 @@ function App() {
         <CreateFolderModal />
         <AddFolderFileModal />
         <SettingsModal />
-        {IS_BETA && <BetaSurveyMount />}
-        {BETA_CODEX_ONLY && <CodexAutoSetup />}
+        {IS_BETA && <BetaFeedbackModal />}
+        {IS_BETA && <CodexAuthBanner />}
         <NotificationModal
           notification={notification}
           onClose={clearNotification}

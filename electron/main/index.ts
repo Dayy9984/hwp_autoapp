@@ -23,6 +23,7 @@ const __dirnameForDotenv = dirnameForDotenv(fileURLToPathForDotenv(import.meta.u
 dotenvConfig({ path: resolveForDotenv(__dirnameForDotenv, '../../.env') })
 
 import { app, BrowserWindow, shell, ipcMain, dialog, screen, powerMonitor } from 'electron'
+import { spawn as nodeSpawn } from 'node:child_process'
 
 
 
@@ -78,7 +79,7 @@ import { registerDbHandlers } from './db-handlers'
 import { registerMaintenanceHandlers } from './maintenance-handlers'
 import { registerUpdateHandlers, setUpdateMainWindow, startAutoUpdateCheck } from './update-handlers'
 import { registerLogHandlers } from './log-handlers'
-import { registerLicenseHandlers, initialLicenseCheck, getLastStatus } from './license-gate'
+import { registerLicenseHandlers, initialLicenseCheck, getLastStatus, assertLicenseOk, licenseEvents } from './license-gate'
 import { getLogService } from '../services/log-service'
 import { dbManager } from '../services/db-manager'
 import { telemetry } from '../services/telemetry'
@@ -267,6 +268,25 @@ const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 
 
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
+
+// dev / E2E 시 Chrome DevTools Protocol 외부 attach 허용 (Playwright connectOverCDP)
+// 좀비 socket 방지: PID 기반 의사-random 포트 (9230~9399) → 매 startup 다른 포트 → Windows ghost socket 회피.
+// 외부 스크립트는 userData/.cdp-port 파일에서 포트 번호 읽기.
+if (!app.isPackaged || process.env.INSERTY_E2E === '1') {
+  const _cdpPid = process.pid || Date.now()
+  const _cdpPort = 9230 + (_cdpPid % 170)
+  app.commandLine.appendSwitch('remote-debugging-port', String(_cdpPort))
+  app.commandLine.appendSwitch('remote-allow-origins', '*')
+  app.whenReady().then(() => {
+    try {
+      const portFile = path.join(app.getPath('userData'), '.cdp-port')
+      fs.writeFileSync(portFile, String(_cdpPort))
+      console.log(`[CDP] remote-debugging-port=${_cdpPort} → ${portFile}`)
+    } catch (e) {
+      console.log(`[CDP] write port file failed: ${(e as Error).message}`)
+    }
+  })
+}
 
 
 
@@ -1862,19 +1882,41 @@ app.whenReady().then(async () => {
   announcementFetcher.init()
   registerAnnouncementHandlers()
 
-  // 베타 trace creds — 라이센스 토큰을 Python 에 30분마다 푸시 (토큰 갱신 대응).
-  startBetaCredsPushLoop()
-
   // 라이센스 초기 검증 — pending key 자동 활성화 + 캐시 토큰 검증
   // BrowserWindow 생성 전에 결과가 결정되어야 렌더러가 getInitialStatus 호출 시
   // 올바른 상태를 받는다. 네트워크 실패 시에도 verify()가 빠르게 offline_grace/blocked를
   // 반환하므로 무한 대기는 없음.
   ipcMain.handle('license:getInitialStatus', () => getLastStatus())
+
+  // 라이센스 ok → 차단 상태 전이 시: 진행 중인 chat stream 강제 cancel + renderer 통지.
+  // Frontend 의 onStatusChanged 리스너가 자동으로 LicenseGate 를 띄움.
+  licenseEvents.on('revoked', (_prev, next) => {
+    console.warn('[License] state revoked → cancelling active streams. next=', next?.state)
+    try {
+      if (activeChatCancelToken) activeChatCancelToken.cancelled = true
+    } catch {}
+    try {
+      agentBridge?.cancelStream().catch(() => {})
+    } catch {}
+    try {
+      if (win && !win.isDestroyed()) {
+        const stateUpper = (next?.state || 'blocked').toString().toUpperCase()
+        win.webContents.send('chat:progress', 'error', {
+          message: `LICENSE_${stateUpper}`,
+        })
+      }
+    } catch {}
+  })
+
   try {
     await initialLicenseCheck()
   } catch (e) {
     console.error('[License] initial check error:', e)
   }
+
+  // 베타 trace creds — 라이센스 토큰을 Python 에 30분마다 푸시 (토큰 갱신 대응).
+  // ★ initialLicenseCheck 후로 이동: token cache 채워진 후에 첫 push 가 의미 있음.
+  startBetaCredsPushLoop()
 
   // 1. 스플래시 윈도우 먼저 생성 (즉시 표시)
   try {
@@ -2136,6 +2178,10 @@ ipcMain.handle('python:start', async () => {
 
 // Agent Bridge start (LLM process)
 ipcMain.handle('agent:start', async () => {
+  // B3: 라이센스 ok 아닐 때 agent process 자체를 띄우지 않음.
+  try { assertLicenseOk('agent:start') } catch (e: any) {
+    return { success: false, error: e?.message || 'LICENSE_BLOCKED' }
+  }
   if (!agentBridge || !agentBridge.isRunning()) {
     await initAgentBridge()
   }
@@ -2152,18 +2198,31 @@ ipcMain.handle('codex:status', async () => {
   }
 })
 
-// Codex CLI 로그인 (브라우저 열기)
+// Codex CLI 로그인 — 외부 터미널 창에서 `codex login` 실행 (default OAuth 흐름).
+// 사용자는 새 창에서 1) ChatGPT OAuth (자연스러운 흐름) / 2) Device Code / 3) API key 중
+// 본인이 선택. ipcMain.handle 내부에서 capture 하면 stdin 입력이 불가능하므로 외부 창.
+//
+// require 가 ESM 빌드에서 ReferenceError 던지던 이전 버그 fix — `nodeSpawn` import 사용.
 ipcMain.handle('codex:login', async () => {
-  const { exec } = require('child_process')
-  return new Promise((resolve) => {
-    exec('codex login', { shell: true, timeout: 60000 }, (err: any, stdout: string, stderr: string) => {
-      if (err) {
-        resolve({ success: false, error: stderr || err.message })
-      } else {
-        resolve({ success: true })
-      }
-    })
-  })
+  try {
+    if (process.platform === 'win32') {
+      const child = nodeSpawn('cmd.exe', ['/c', 'start', '', 'cmd.exe', '/k', 'codex login'], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: false,
+      })
+      child.unref()
+      return { success: true, mode: 'external_terminal' }
+    }
+    const cmd = process.platform === 'darwin'
+      ? ['osascript', ['-e', 'tell app "Terminal" to do script "codex login"']]
+      : ['x-terminal-emulator', ['-e', 'codex login']]
+    const child = nodeSpawn(cmd[0] as string, cmd[1] as string[], { detached: true, stdio: 'ignore' })
+    child.unref()
+    return { success: true, mode: 'external_terminal' }
+  } catch (err: any) {
+    return { success: false, error: err?.message || String(err) }
+  }
 })
 
 
@@ -2211,7 +2270,11 @@ ipcMain.handle('hwp:getCompatibilityStatus', () => {
 
 ipcMain.handle('python:call', async (_, method: string, params: any) => {
 
-
+  // B3: python:call 은 만능 게이트 — 모든 Python 메서드가 여기로 라우팅됨.
+  // 라이센스 차단 상태에서 임의 Python 함수가 호출되지 않도록 가드.
+  try { assertLicenseOk('python:call') } catch (e: any) {
+    return { success: false, error: e?.message || 'LICENSE_BLOCKED' }
+  }
 
   if (!pythonBridge || !pythonBridge.isRunning()) {
 
@@ -3405,6 +3468,8 @@ ipcMain.handle('chat:send', async (
 
 
   try {
+    // B3: 라이센스 게이트 — main 측 1차 가드. 만료/회수 시 Python 호출조차 안 함.
+    assertLicenseOk('chat:send')
     console.log('[Main] chat:send handler started, prompt:', prompt?.substring(0, 50))
 
     // Python Bridge (COM Process) 시작
@@ -5403,6 +5468,47 @@ ${filesList.join('\n')}
       console.log('[Main] LLM command counts:', `final=${finalPassCommands}, edits=${editsCount}`)
       console.log('[Main] LLM stream completed:', streamResult)
 
+      // LLM 스트리밍 자체가 실패 — 명시적 에러 응답 (silent fallback 금지).
+      // usage_limit / 429 / 401 등 사용자가 실제 원인을 알아야 대응 가능.
+      if ((streamResult as any)?.success === false) {
+        const rawError = String((streamResult as any)?.error || '').trim()
+        agentBridge.off('delta', deltaHandler)
+        agentBridge.off('progress', progressHandler)
+        let userMessage = 'AI 요청 처리 중 오류가 발생했습니다.'
+        let errorCode = 'llm_error'
+        if (/usage_limit_reached|429/.test(rawError)) {
+          const resetMatch = rawError.match(/resets_in_seconds['"]?\s*:\s*(\d+)/)
+          const resetSec = resetMatch ? parseInt(resetMatch[1], 10) : 0
+          const resetText = resetSec > 0
+            ? `약 ${Math.floor(resetSec / 3600)}시간 ${Math.floor((resetSec % 3600) / 60)}분 후`
+            : '잠시 후'
+          userMessage = `ChatGPT 사용량 한도에 도달했습니다. ${resetText} 다시 시도해주세요.`
+          errorCode = 'usage_limit_reached'
+        } else if (/401|invalid_api_key|unauthorized/i.test(rawError)) {
+          userMessage = 'Codex 인증이 만료되었습니다. codex login 으로 재로그인해주세요.'
+          errorCode = 'auth_expired'
+        } else if (/timeout|ECONNREFUSED|ECONNRESET|ETIMEDOUT/i.test(rawError)) {
+          userMessage = '네트워크 연결이 불안정합니다. 잠시 후 다시 시도해주세요.'
+          errorCode = 'network_error'
+        } else if (/insufficient_quota/i.test(rawError)) {
+          userMessage = 'OpenAI 크레딧이 부족합니다.'
+          errorCode = 'insufficient_quota'
+        }
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('chat:progress', 'error', { message: userMessage })
+        }
+        return {
+          success: false,
+          error: userMessage,
+          errorCode,
+          rawError,
+          edits: 0,
+          executedDeltas: [],
+          messages: [],
+          token_usage: (streamResult as any)?.token_usage,
+        }
+      }
+
 
 
       // Delta 및 Progress 핸들러 제거 (스트리밍 완료 후)
@@ -5812,6 +5918,38 @@ ipcMain.handle('edit:redo', async (_, count?: number) => {
 
 
 
+
+// Tally 도메인 storage 강제 클리어 — partial draft 잔존 방지.
+// origin filter (https://tally.so) 가 subdomain 못 잡아서 모든 tally.so / *.tally.so 쿠키 명시 제거.
+// + 전체 storage 중 cookies/cachestorage 만 (사용자 localStorage 보존).
+ipcMain.handle('tally:clearStorage', async () => {
+  try {
+    if (win && !win.isDestroyed()) {
+      const ses = win.webContents.session
+      // 1. Tally 도메인 쿠키 모두 제거 (*.tally.so 포함)
+      const cookies = await ses.cookies.get({ domain: 'tally.so' })
+      for (const c of cookies) {
+        const url = `${c.secure ? 'https' : 'http'}://${c.domain?.startsWith('.') ? c.domain.slice(1) : c.domain}${c.path}`
+        try { await ses.cookies.remove(url, c.name) } catch {}
+      }
+      // 2. Tally 도메인 storage — origin 별로 명시 (subdomain 포함 모든 시도)
+      const origins = ['https://tally.so', 'https://app.tally.so', 'https://embed.tally.so', 'https://forms.tally.so']
+      for (const origin of origins) {
+        try {
+          await ses.clearStorageData({
+            origin,
+            storages: ['localstorage', 'indexdb', 'cachestorage', 'serviceworkers'],
+          })
+        } catch {}
+      }
+      // 3. Tally HTTP cache
+      try { await ses.clearCache() } catch {}
+    }
+    return { ok: true }
+  } catch (e: any) {
+    return { ok: false, error: e?.message }
+  }
+})
 
 // Diff 모드 설정
 
@@ -6331,7 +6469,7 @@ ipcMain.handle('trackChanges:applyAll', async () => {
 
   try {
 
-
+    assertLicenseOk('trackChanges:applyAll')
 
     if (!pythonBridge || !pythonBridge.isRunning()) {
 
@@ -6391,7 +6529,9 @@ ipcMain.handle('trackChanges:applyAll', async () => {
 
 ipcMain.handle('trackChanges:rejectAll', async (_, params?: { docKey?: string; chatId?: string }) => {
 
-
+  try { assertLicenseOk('trackChanges:rejectAll') } catch (e: any) {
+    return { success: false, error: e?.message || 'LICENSE_BLOCKED' }
+  }
 
   const docKey = params?.docKey
 
@@ -6717,7 +6857,7 @@ ipcMain.handle('trackChanges:applySelected', async () => {
 
   try {
 
-
+    assertLicenseOk('trackChanges:applySelected')
 
     if (!pythonBridge || !pythonBridge.isRunning()) {
 
@@ -6785,7 +6925,9 @@ ipcMain.handle('trackChanges:applySelected', async () => {
 
 ipcMain.handle('trackChanges:rejectSelected', async (_, params?: { docKey?: string; chatId?: string }) => {
 
-
+  try { assertLicenseOk('trackChanges:rejectSelected') } catch (e: any) {
+    return { success: false, error: e?.message || 'LICENSE_BLOCKED' }
+  }
 
   const docKey = params?.docKey
 
@@ -7231,7 +7373,7 @@ ipcMain.handle('cvd:extractPair', async (_, args: {
 
   try {
 
-
+    assertLicenseOk('cvd:extractPair')
 
     if (!pythonBridge || !pythonBridge.isRunning()) {
 
@@ -7411,7 +7553,7 @@ ipcMain.handle('cvd:generateDiff', async (_, args: {
 
   try {
 
-
+    assertLicenseOk('cvd:generateDiff')
 
     if (!pythonBridge || !pythonBridge.isRunning()) {
 
@@ -7524,7 +7666,7 @@ ipcMain.handle('cvd:processTemplatePair', async (_, args: {
 
   try {
 
-
+    assertLicenseOk('cvd:processTemplatePair')
 
     if (!pythonBridge || !pythonBridge.isRunning()) {
 
@@ -7753,7 +7895,9 @@ ipcMain.handle('fileSearch:indexPair', async (_, args: {
 
 }) => {
 
-
+  try { assertLicenseOk('fileSearch:indexPair') } catch (e: any) {
+    return { success: false, error: e?.message || 'LICENSE_BLOCKED' }
+  }
 
   if (!pythonBridge || !pythonBridge.isRunning()) {
 
@@ -7912,7 +8056,9 @@ ipcMain.handle('fileSearch:indexFile', async (_, args: {
 
 }) => {
 
-
+  try { assertLicenseOk('fileSearch:indexFile') } catch (e: any) {
+    return { success: false, error: e?.message || 'LICENSE_BLOCKED' }
+  }
 
   if (!pythonBridge || !pythonBridge.isRunning()) {
 
@@ -8045,7 +8191,9 @@ ipcMain.handle('fileSearch:deletePair', async (_, args: {
 
 }) => {
 
-
+  try { assertLicenseOk('fileSearch:deletePair') } catch (e: any) {
+    return { success: false, error: e?.message || 'LICENSE_BLOCKED' }
+  }
 
   if (!pythonBridge || !pythonBridge.isRunning()) {
 
@@ -8170,7 +8318,9 @@ ipcMain.handle('fileSearch:deleteFile', async (_, args: {
 
 }) => {
 
-
+  try { assertLicenseOk('fileSearch:deleteFile') } catch (e: any) {
+    return { success: false, error: e?.message || 'LICENSE_BLOCKED' }
+  }
 
   if (!pythonBridge || !pythonBridge.isRunning()) {
 
@@ -8325,7 +8475,9 @@ ipcMain.handle('fileSearch:indexChatFile', async (_, args: {
 
 }) => {
 
-
+  try { assertLicenseOk('fileSearch:indexChatFile') } catch (e: any) {
+    return { success: false, error: e?.message || 'LICENSE_BLOCKED' }
+  }
 
   if (!pythonBridge || !pythonBridge.isRunning()) {
 
@@ -8458,7 +8610,9 @@ ipcMain.handle('fileSearch:deleteChatScope', async (_, args: {
 
 }) => {
 
-
+  try { assertLicenseOk('fileSearch:deleteChatScope') } catch (e: any) {
+    return { success: false, error: e?.message || 'LICENSE_BLOCKED' }
+  }
 
   if (!pythonBridge || !pythonBridge.isRunning()) {
 

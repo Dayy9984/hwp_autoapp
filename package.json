@@ -1,7 +1,7 @@
 {
   "name": "inserty-desktop",
   "productName": "Inserty AI",
-  "version": "0.1.9-beta.1",
+  "version": "0.1.9-beta.3",
   "main": "dist-electron/main/index.mjs",
   "description": "Inserty AI - AI 기반 문서 편집 솔루션",
   "author": "Inserty Team",

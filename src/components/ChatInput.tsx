@@ -140,14 +140,15 @@ export function ChatInput({ folderId }: ChatInputProps = {}) {
   }
 
   const ensureOpenAiKey = async () => {
-    // Codex(ChatGPT) 모드: 인증 상태 사전 체크
+    // Codex(ChatGPT) 모드: 인증 상태 사전 체크.
+    // 미인증 시 설정 모달의 'AI' 탭을 열어 사용자가 익숙한 자리에서 Codex 로그인 진행.
     if (connectionMode === 'codex') {
       const api = (window as unknown as { electronAPI?: any }).electronAPI
       if (!api?.codex?.status) return true
       try {
         const s = await api.codex.status()
         if (!s.installed || !s.authenticated) {
-          window.dispatchEvent(new CustomEvent('beta:codex-needs-setup'))
+          openModal('settings', { tab: 'ai' })
           return false
         }
       } catch { /* fall through */ }
@@ -1142,7 +1143,6 @@ export function ChatInput({ folderId }: ChatInputProps = {}) {
         console.log('[ChatInput] v4.1.4 거절 정보 consume 완료')
       }
 
-
       if (result.success) {
         // 성공 응답 - 마지막 메시지 업데이트
         const responseMessages = Array.isArray((result as any).messages)
@@ -1265,6 +1265,12 @@ export function ChatInput({ folderId }: ChatInputProps = {}) {
         progressMessageIdRef.current = null
       } else {
         // 에러 응답
+        // Layer 1 가드: 백엔드 (main IPC / Python) 가 LICENSE_* 에러 반환하면
+        // 즉시 license.forceReverify() 호출 → main 이 새 상태 broadcast → App.tsx 가
+        // LicenseGate 표시 (input 도 함께 사라짐). UX 개선 + 1차 가드.
+        if (typeof result.error === 'string' && result.error.startsWith('LICENSE_')) {
+          try { void (window as any).electronAPI?.license?.forceReverify?.() } catch {}
+        }
         const errorMessage = toUserSafeErrorMessage(result.error)
         updateLastMessage(chatId, errorMessage)
         const existingMetadata = getMessageMetadata(chatId, assistantMessageId)
@@ -1288,6 +1294,11 @@ export function ChatInput({ folderId }: ChatInputProps = {}) {
       }
     } catch (error: any) {
       console.error('Chat error:', error)
+      // Layer 1 가드: throw 된 에러도 동일하게 LICENSE_* 패턴 체크.
+      const errMsg = typeof error?.message === 'string' ? error.message : ''
+      if (errMsg.startsWith('LICENSE_')) {
+        try { void (window as any).electronAPI?.license?.forceReverify?.() } catch {}
+      }
       if (chatId) {
         const safeMessage = toUserSafeErrorMessage(error?.message || '알 수 없는 오류')
         updateLastMessage(chatId, safeMessage)

@@ -1,12 +1,28 @@
 // ============================================================
 // auto-update-service.ts
-// electron-updater 기반 자동 업데이트 서비스
+// electron-updater 기반 자동 업데이트 서비스.
+//
+// 아키텍처 (beta.3+):
+//   클라이언트는 PAT 를 가지지 않음. Cloudflare Worker 가 PAT 보유하고
+//   GitHub private release 와 사용자 사이에서 proxy 역할.
+//
+//   electron-updater → Worker /auto-update/latest.yml → GitHub releases/latest
+//                    → Worker /auto-update/<file>     → 302 signed URL → GitHub CDN
+//
+//   이전: PAT inject (보안 hole — bundle 노출 시 private repo 접근 가능)
+//   현재: provider=generic, url=Worker endpoint
+//
+// 기타:
+//   - lastSignificantStatus 에 error / not-available 도 캐싱 → renderer 가
+//     늦게 마운트되어도 모든 상태를 복구.
+//   - checkForUpdates 재진입 가드: 동시 다중 호출 방지.
+//   - UpdateInfo.releaseNotes 안전 직렬화 (string | string[]).
 // ============================================================
 
 import { app, BrowserWindow } from 'electron'
 import { EventEmitter } from 'events'
 
-// Lazy-loaded autoUpdater (ESM/CJS 호환을 위해 동적 로딩)
+// Lazy-loaded autoUpdater (ESM/CJS 호환)
 let autoUpdater: any = null
 
 async function getAutoUpdater() {
@@ -17,7 +33,6 @@ async function getAutoUpdater() {
   return autoUpdater
 }
 
-// Type definitions for electron-updater
 interface UpdateInfo {
   version: string
   releaseDate: string
@@ -33,12 +48,45 @@ interface ProgressInfo {
 }
 
 export interface UpdateStatus {
-  status: 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
+  status: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
   info?: UpdateInfo
   progress?: ProgressInfo
   error?: string
-  isCritical?: boolean  // 필수 업데이트 여부
-  releaseNotes?: string // 릴리스 노트
+  isCritical?: boolean
+  releaseNotes?: string
+}
+
+// Worker proxy endpoint. PAT 는 Worker 측에서만 보유.
+// 변경 시 Worker (inserty-beta-admin/worker/src/auto-update.ts) 와
+// electron-builder.json 의 publish.url 도 함께 갱신.
+const UPDATE_FEED_URL = 'https://inserty-beta-worker.snsoffice.workers.dev/auto-update/'
+const LATEST_YML_URL = UPDATE_FEED_URL + 'latest.yml'
+
+/**
+ * latest.yml 을 raw fetch 해서 isCritical custom field 를 파싱.
+ * electron-updater 는 알 수 없는 field 를 무시하므로 별도 fetch 가 필요.
+ *
+ * Worker 가 X-Is-Critical 헤더도 같이 내려주므로 헤더 우선, fallback 으로 body 파싱.
+ */
+async function fetchIsCriticalForVersion(version: string): Promise<boolean> {
+  try {
+    const res = await fetch(LATEST_YML_URL + `?v=${encodeURIComponent(version)}&_=${Date.now()}`, {
+      method: 'GET',
+      headers: { 'Cache-Control': 'no-cache' },
+    })
+    if (!res.ok) return false
+
+    // 1차: X-Is-Critical 헤더 (Worker 가 inject).
+    const hdr = res.headers.get('X-Is-Critical')
+    if (hdr) return hdr.toLowerCase() === 'true'
+
+    // 2차: body 파싱 — `isCritical: true` 라인 (Worker 가 inject).
+    const body = await res.text()
+    return /^isCritical:\s*true\s*$/im.test(body)
+  } catch (e) {
+    console.warn('[AutoUpdate] fetchIsCriticalForVersion failed:', (e as Error).message)
+    return false
+  }
 }
 
 export class AutoUpdateService extends EventEmitter {
@@ -46,21 +94,16 @@ export class AutoUpdateService extends EventEmitter {
   private mainWindow: BrowserWindow | null = null
   private isDownloading = false
   private downloadedVersion: string | null = null
-  private pendingCriticalUpdate: { version: string; releaseNotes?: string } | null = null
   private isInitialized = false
-  // 마지막 의미 있는 상태 캐시 (renderer가 늦게 연결되어도 놓치지 않도록)
+  private isChecking = false
   private lastSignificantStatus: UpdateStatus | null = null
 
   constructor() {
     super()
   }
 
-  /**
-   * 초기화 (lazy)
-   */
   private async ensureInitialized() {
     if (this.isInitialized) return
-
     try {
       const updater = await getAutoUpdater()
       if (updater) {
@@ -72,29 +115,34 @@ export class AutoUpdateService extends EventEmitter {
     }
   }
 
-  /**
-   * 메인 윈도우 설정 (IPC 통신용)
-   */
   setMainWindow(window: BrowserWindow) {
     this.mainWindow = window
+    // 창이 destroy 될 때 자동으로 참조 해제 → 이후 push 시도 race condition 방어
+    window.once('closed', () => {
+      if (this.mainWindow === window) {
+        this.mainWindow = null
+      }
+    })
+    // 마지막 상태가 있으면 push (창이 늦게 떴을 때 복구)
+    if (this.lastSignificantStatus) {
+      this.pushToWindow(this.lastSignificantStatus)
+    }
   }
 
-  /**
-   * autoUpdater 초기 설정
-   */
   private setupAutoUpdater(updater: any) {
-    const updateFeedUrl = process.env.UPDATE_FEED_URL
-    if (!updateFeedUrl) {
-      console.log('[AutoUpdate] UPDATE_FEED_URL not set, auto-update disabled')
-      return
-    }
-    updater.setFeedURL({ provider: 'generic', url: updateFeedUrl })
+    // Worker proxy — PAT 클라이언트 미보유.
+    // Worker 가 /auto-update/latest.yml + /auto-update/<file> 로 GitHub 와 통신.
+    updater.setFeedURL({
+      provider: 'generic',
+      url: UPDATE_FEED_URL,
+      channel: 'latest',
+    } as any)
 
-    // 자동 다운로드 비활성화 (사용자 확인 후 다운로드)
+    // autoDownload=false: 사용자가 [업데이트] 클릭한 후에 다운로드 시작.
+    // 진행률 창이 download → install 까지 단일 흐름으로 표시.
     updater.autoDownload = false
-    updater.autoInstallOnAppQuit = true
+    updater.autoInstallOnAppQuit = false
 
-    // 이벤트 핸들러 등록
     updater.on('checking-for-update', () => {
       console.log('[AutoUpdate] Checking for updates...')
       this.sendStatusToRenderer({ status: 'checking' })
@@ -102,11 +150,21 @@ export class AutoUpdateService extends EventEmitter {
 
     updater.on('update-available', (info: UpdateInfo) => {
       console.log('[AutoUpdate] Update available:', info.version)
-      const isCritical = false
-      const releaseNotes = undefined
+      const releaseNotes = this.normalizeReleaseNotes((info as any).releaseNotes)
 
-      this.sendStatusToRenderer({ status: 'available', info, isCritical, releaseNotes })
-      this.emit('update-available', { ...info, isCritical, releaseNotes })
+      // 우선 즉시 available 상태 push (isCritical 미정).
+      this.sendStatusToRenderer({ status: 'available', info, releaseNotes })
+      this.emit('update-available', { ...info, releaseNotes })
+
+      // 백그라운드에서 isCritical 조회 후 보강된 상태 재push.
+      // electron-updater 는 unknown yaml field 를 무시하므로 별도 raw fetch 가 필요.
+      void fetchIsCriticalForVersion(info.version).then((isCritical) => {
+        if (isCritical) {
+          console.log('[AutoUpdate] Marked as CRITICAL:', info.version)
+          this.sendStatusToRenderer({ status: 'available', info, releaseNotes, isCritical: true })
+          this.emit('update-available', { ...info, releaseNotes, isCritical: true })
+        }
+      })
     })
 
     updater.on('update-not-available', (info: UpdateInfo) => {
@@ -115,7 +173,6 @@ export class AutoUpdateService extends EventEmitter {
     })
 
     updater.on('download-progress', (progress: ProgressInfo) => {
-      console.log(`[AutoUpdate] Download progress: ${progress.percent.toFixed(1)}%`)
       this.sendStatusToRenderer({ status: 'downloading', progress })
     })
 
@@ -135,30 +192,79 @@ export class AutoUpdateService extends EventEmitter {
     })
   }
 
-  /**
-   * Renderer 프로세스에 상태 전송
-   */
-  private sendStatusToRenderer(status: UpdateStatus) {
-    // 의미 있는 상태는 캐시 (available, downloaded - renderer가 놓쳤을 때 복구용)
-    if (status.status === 'available' || status.status === 'downloaded') {
-      this.lastSignificantStatus = status
+  private normalizeReleaseNotes(notes: string | string[] | null | undefined): string | undefined {
+    if (!notes) return undefined
+    if (Array.isArray(notes)) return notes.filter((s) => typeof s === 'string').join('\n\n')
+    return typeof notes === 'string' ? notes : undefined
+  }
+
+  private extraBroadcastWindows: Set<BrowserWindow> = new Set()
+  private lastDownloadingStatus: UpdateStatus | null = null
+
+  /** 추가 broadcast 대상 (메인 외 update progress 창 등). */
+  addBroadcastWindow(w: BrowserWindow) {
+    this.extraBroadcastWindows.add(w)
+    w.once('closed', () => this.extraBroadcastWindows.delete(w))
+
+    // 윈도우 첫 로드 완료 시점에 최신 progress / lastStatus push.
+    // (events fire 시점에 renderer listener 미등록 race 방어)
+    const sendCurrent = () => {
+      try {
+        if (w.isDestroyed()) return
+        if (this.lastDownloadingStatus) {
+          w.webContents.send('auto-update:status', this.lastDownloadingStatus)
+        } else if (this.lastSignificantStatus) {
+          w.webContents.send('auto-update:status', this.lastSignificantStatus)
+        }
+      } catch {}
     }
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      this.mainWindow.webContents.send('auto-update:status', status)
+
+    if (w.webContents.isLoading()) {
+      w.webContents.once('did-finish-load', () => setTimeout(sendCurrent, 500))
+    } else {
+      sendCurrent()
     }
   }
 
-  /**
-   * 마지막 의미 있는 상태 조회 (renderer가 늦게 연결될 때 사용)
-   */
+  private pushToWindow(status: UpdateStatus) {
+    const targets = [this.mainWindow, ...this.extraBroadcastWindows].filter(Boolean) as BrowserWindow[]
+    for (const w of targets) {
+      if (!w || w.isDestroyed()) continue
+      try {
+        const wc = w.webContents
+        if (!wc || wc.isDestroyed()) continue
+        wc.send('auto-update:status', status)
+      } catch (err) {
+        console.warn('[AutoUpdate] pushToWindow skipped:', (err as Error).message)
+      }
+    }
+  }
+
+  private sendStatusToRenderer(status: UpdateStatus) {
+    if (status.status !== 'checking' && status.status !== 'downloading') {
+      this.lastSignificantStatus = status
+    }
+    // downloading 도 별도 캐싱 — 새로 띄운 window 가 즉시 현재 % 받을 수 있게.
+    if (status.status === 'downloading') {
+      this.lastDownloadingStatus = status
+    }
+    this.pushToWindow(status)
+  }
+
   getLastStatus(): UpdateStatus | null {
     return this.lastSignificantStatus
   }
 
-  /**
-   * 업데이트 확인
-   */
-  async checkForUpdates(): Promise<{ success: boolean; updateAvailable?: boolean; version?: string; error?: string }> {
+  async checkForUpdates(): Promise<{
+    success: boolean
+    updateAvailable?: boolean
+    version?: string
+    error?: string
+  }> {
+    if (this.isChecking) {
+      return { success: false, error: 'check already in progress' }
+    }
+    this.isChecking = true
     try {
       await this.ensureInitialized()
       const updater = await getAutoUpdater()
@@ -171,41 +277,31 @@ export class AutoUpdateService extends EventEmitter {
         const currentVersion = app.getVersion()
         const latestVersion = result.updateInfo.version
         const updateAvailable = this.compareVersions(latestVersion, currentVersion) > 0
-
-        return {
-          success: true,
-          updateAvailable,
-          version: latestVersion
-        }
+        return { success: true, updateAvailable, version: latestVersion }
       }
       return { success: true, updateAvailable: false }
     } catch (error) {
       console.error('[AutoUpdate] Check error:', error)
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      }
+      const msg = error instanceof Error ? error.message : 'Unknown error'
+      this.sendStatusToRenderer({ status: 'error', error: msg })
+      return { success: false, error: msg }
+    } finally {
+      this.isChecking = false
     }
   }
 
-  /**
-   * 업데이트 다운로드 시작
-   */
   async downloadUpdate(): Promise<{ success: boolean; error?: string }> {
     if (this.isDownloading) {
       return { success: false, error: 'Download already in progress' }
     }
-
     try {
       await this.ensureInitialized()
       const updater = await getAutoUpdater()
       if (!updater) {
         return { success: false, error: 'AutoUpdater not available' }
       }
-
       this.isDownloading = true
-      // await 하지 않음 — downloadUpdate()는 완료까지 수 분 소요
-      // 진행률/완료는 download-progress / update-downloaded 이벤트로 처리
+      // 진행률 / 완료는 이벤트로 처리. await 하지 않음 (수 분 소요).
       updater.downloadUpdate().catch((error: Error) => {
         this.isDownloading = false
         console.error('[AutoUpdate] Download error:', error)
@@ -217,46 +313,36 @@ export class AutoUpdateService extends EventEmitter {
       console.error('[AutoUpdate] Download init error:', error)
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: error instanceof Error ? error.message : 'Unknown error',
       }
     }
   }
 
-  /**
-   * 업데이트 설치 및 앱 재시작
-   */
   async quitAndInstall() {
     console.log('[AutoUpdate] Installing update and restarting...')
     const updater = await getAutoUpdater()
     if (updater) {
       try {
-        // isSilent=true: NSIS /S 플래그 → 설치 마법사 UI 없이 조용히 설치
-        // installer.nsh의 ${Silent} 분기로 업그레이드 모드(데이터 보존) 처리됨
-        updater.quitAndInstall(true, true)
+        // (isSilent=false, isForceRunAfter=true): NSIS UI 표시 + 설치 후 앱 자동 재실행.
+        // isSilent=true 였을 때 사용자가 "재시작" 클릭 후 70-90초간 화면이 깜깜해서
+        // 진행 중인지 알 수 없는 UX 문제가 있었음. 직접 Setup.exe 실행 시와 동일한 progress 표시.
+        updater.quitAndInstall(false, true)
       } catch (error) {
         console.error('[AutoUpdate] quitAndInstall error:', error)
       }
     }
   }
 
-  /**
-   * 주기적 업데이트 체크 시작
-   */
   startPeriodicCheck(intervalMs = 60 * 60 * 1000) {
-    // 앱 시작 10초 후 첫 체크
+    this.stopPeriodicCheck()
     setTimeout(() => {
       void this.checkForUpdates()
     }, 10_000)
-
-    // 주기적 체크
     this.checkIntervalId = setInterval(() => {
       void this.checkForUpdates()
     }, intervalMs)
   }
 
-  /**
-   * 주기적 체크 중지
-   */
   stopPeriodicCheck() {
     if (this.checkIntervalId) {
       clearInterval(this.checkIntervalId)
@@ -264,55 +350,28 @@ export class AutoUpdateService extends EventEmitter {
     }
   }
 
-  /**
-   * 현재 버전 정보
-   */
   getCurrentVersion(): string {
     return app.getVersion()
   }
 
-  /**
-   * 다운로드 완료된 버전 정보
-   */
   getDownloadedVersion(): string | null {
     return this.downloadedVersion
   }
 
-  /**
-   * 필수 업데이트 대기 중인지 확인
-   */
-  hasPendingCriticalUpdate(): boolean {
-    return this.pendingCriticalUpdate !== null
-  }
-
-  /**
-   * 대기 중인 필수 업데이트 정보
-   */
-  getPendingCriticalUpdate(): { version: string; releaseNotes?: string } | null {
-    return this.pendingCriticalUpdate
-  }
-
-  /**
-   * 버전 비교 (semver)
-   * @returns 1 if v1 > v2, -1 if v1 < v2, 0 if equal
-   */
   private compareVersions(v1: string, v2: string): number {
-    const parts1 = v1.split('.').map(Number)
-    const parts2 = v2.split('.').map(Number)
-
-    for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+    const parts1 = v1.split('.').map((p) => parseInt(p, 10) || 0)
+    const parts2 = v2.split('.').map((p) => parseInt(p, 10) || 0)
+    const len = Math.max(parts1.length, parts2.length)
+    for (let i = 0; i < len; i++) {
       const p1 = parts1[i] || 0
       const p2 = parts2[i] || 0
-
       if (p1 > p2) return 1
       if (p1 < p2) return -1
     }
-
     return 0
   }
 }
 
-// Singleton instance
 let autoUpdateService: AutoUpdateService | null = null
 
 export function getAutoUpdateService(): AutoUpdateService {

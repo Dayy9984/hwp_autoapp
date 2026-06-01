@@ -88,6 +88,18 @@ class AgentProcess:
             if method == "ping":
                 return {"id": request_id, "result": {"pong": True}}
 
+            elif method == "beta:set_creds":
+                # Electron 이 라이센스 verify 토큰 + device_id 등록 / 갱신
+                try:
+                    from services.beta_trace import set_credentials
+                    result = set_credentials(
+                        params.get("token", ""),
+                        params.get("device_id", ""),
+                    )
+                    return {"id": request_id, "result": result}
+                except Exception as e:
+                    return {"id": request_id, "result": {"ok": False, "error": str(e)}}
+
             elif method == "stream_llm":
                 # LLM 스트리밍 호출 (Delta 전송) - 비동기 처리로 cancel 요청을 받을 수 있게 함
                 stream_thread = threading.Thread(
@@ -192,6 +204,31 @@ class AgentProcess:
 
         if not html or not prompt:
             raise ValueError("html and prompt are required")
+
+        # 라이센스 검증 — 서버 발급 JWT 의 exp 검사 (Layer 3 defense in depth).
+        # Frontend gate / IPC handler 가 우회되어도 여기서 차단. Nuitka 빌드 후 우회 매우 어려움.
+        # 토큰은 set_credentials() 통해 module-level _LICENSE_TOKEN 에 저장됨 (beta_trace.py).
+        try:
+            from services.beta_trace import _LICENSE_TOKEN as _lt  # type: ignore
+            import services.beta_trace as _bt  # 매 호출 시 최신 값 read
+            token = _bt._LICENSE_TOKEN or ""
+            if not token:
+                raise ValueError("LICENSE_REQUIRED")
+            # JWT payload 의 exp 만료 검사 (서명은 Supabase 가 발급 시점에 검증)
+            import base64 as _b64, json as _json, time as _time
+            try:
+                payload_b64 = token.split(".")[1]
+                padded = payload_b64 + "=" * ((4 - len(payload_b64) % 4) % 4)
+                payload = _json.loads(_b64.urlsafe_b64decode(padded))
+                exp = int(payload.get("exp", 0))
+                if exp and exp < int(_time.time()):
+                    raise ValueError("LICENSE_EXPIRED")
+            except (ValueError, IndexError, KeyError) as e:
+                if str(e) in ("LICENSE_EXPIRED", "LICENSE_REQUIRED"):
+                    raise
+                raise ValueError("LICENSE_INVALID")
+        except ImportError:
+            raise ValueError("LICENSE_REQUIRED")
 
         # v7.2: RAG 컨텍스트 설정 (OpenAI file_search 기반)
         if enable_rag:

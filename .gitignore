@@ -1,6 +1,9 @@
 # Logs
 logs
 *.log
+
+# VC++ Redistributable (build 시 https://aka.ms/vs/17/release/vc_redist.x64.exe 로 재다운로드 가능)
+build/vc_redist.x64.exe
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

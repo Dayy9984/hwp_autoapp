@@ -1,21 +1,35 @@
-// 베타 라이센스 만료 카운트다운.
-// 베타 종료일: 2026-06-22 23:59:59 KST (모든 사용자 동일).
-// 사이드바 하단에 작게 표시 — 임박 (7일 이내) 시 강조.
+// 라이센스 만료 카운트다운.
+// 라이센스 cache 의 expires_at 을 기준으로 표시. 어드민이 5분/30일/무기한 등
+// 어떻게 발급해도 정확히 반영. 라이센스가 없거나 expires_at 이 null 이면
+// 표시 안 함 (= 무기한 또는 미활성).
+//
+// 안전망: license 정보를 가져오지 못한 초기 단계에는 기존 베타 종료일(2026-06-22)
+// 을 fallback 으로 사용 — 빈 상태로 깜빡이는 것보다 마지막에 알려진 종료일을 보여줌.
 
 import { useEffect, useState } from 'react'
 import { Sparkles, Clock } from 'lucide-react'
 
-// KST 자정 = UTC 14:59:59 of 2026-06-22
-const BETA_END_AT = new Date('2026-06-22T23:59:59+09:00').getTime()
+// fallback (라이센스 정보 fetch 전): 베타 종료일 (KST 자정)
+const FALLBACK_BETA_END_AT = new Date('2026-06-22T23:59:59+09:00').getTime()
 
-function computeRemaining(now: number) {
-  const remainMs = BETA_END_AT - now
-  if (remainMs <= 0) return { expired: true, days: 0, hours: 0, label: '베타 종료' }
+interface Remaining {
+  expired: boolean
+  days: number
+  hours: number
+  minutes: number
+  seconds: number
+}
+
+function computeRemaining(targetMs: number, now: number): Remaining {
+  const remainMs = targetMs - now
+  if (remainMs <= 0) return { expired: true, days: 0, hours: 0, minutes: 0, seconds: 0 }
 
   const totalSec = Math.floor(remainMs / 1000)
   const days = Math.floor(totalSec / 86400)
   const hours = Math.floor((totalSec % 86400) / 3600)
-  return { expired: false, days, hours, label: '' }
+  const minutes = Math.floor((totalSec % 3600) / 60)
+  const seconds = totalSec % 60
+  return { expired: false, days, hours, minutes, seconds }
 }
 
 interface Props {
@@ -24,21 +38,91 @@ interface Props {
 
 export function BetaCountdown({ compact = false }: Props) {
   const [now, setNow] = useState(() => Date.now())
+  // null = 아직 license 정보 로드 안 됨 (fallback 사용)
+  // undefined = license 응답 받았으나 expires_at 이 없음 (= 무기한 → 표시 안 함)
+  // number = 만료 시각 ms
+  const [expiresAtMs, setExpiresAtMs] = useState<number | null | undefined>(null)
 
+  // 라이센스 만료 시각 fetch + onStatusChanged 구독
   useEffect(() => {
-    const tick = () => setNow(Date.now())
-    // 1분마다 업데이트 (남은 시간 표시는 분 단위 정확도면 충분)
-    const t = setInterval(tick, 60_000)
-    return () => clearInterval(t)
+    let cancelled = false
+
+    const applyStatus = (status: any) => {
+      if (cancelled) return
+      // ok / offline_grace 만 expires_at 을 가짐
+      if (!status || (status.state !== 'ok' && status.state !== 'offline_grace')) {
+        // 비-ok 상태 — license-gate 가 BlockedScreen 으로 전환하므로 카운트다운은 의미 없음.
+        // fallback 유지 (혹은 마지막 알려진 값).
+        return
+      }
+      const exp = status.expires_at
+      if (!exp) {
+        setExpiresAtMs(undefined)  // 무기한
+        return
+      }
+      const t = new Date(exp).getTime()
+      if (Number.isFinite(t)) {
+        setExpiresAtMs(t)
+      }
+    }
+
+    // 1) 초기 fetch — main 이 캐시한 lastStatus 즉시 반환 (네트워크 호출 없음)
+    try {
+      const api = (window as any).electronAPI?.license
+      if (api?.getInitialStatus) {
+        api.getInitialStatus().then(applyStatus).catch(() => {})
+      } else if (api?.verify) {
+        api.verify().then(applyStatus).catch(() => {})
+      }
+    } catch {
+      // ignore — fallback 사용
+    }
+
+    // 2) main 의 license:statusChanged 구독 — verify/activate/만료 자동 verify 시 갱신
+    let unsub: (() => void) | undefined
+    try {
+      const api = (window as any).electronAPI?.license
+      if (api?.onStatusChanged) {
+        unsub = api.onStatusChanged(applyStatus)
+      }
+    } catch {
+      // ignore
+    }
+
+    return () => {
+      cancelled = true
+      try {
+        unsub?.()
+      } catch {}
+    }
   }, [])
 
-  const { expired, days, hours } = computeRemaining(now)
-  if (expired) return null  // 만료 후엔 별도 처리 (license 가 알아서 차단)
+  // 카운트다운 틱 — 일 단위 / 시 단위만 표시하므로 빠른 갱신 불필요. 5분 간격.
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 5 * 60_000)
+    return () => clearInterval(t)
+  }, [expiresAtMs])
+
+  // expires_at == undefined → 무기한 (표시 안 함)
+  if (expiresAtMs === undefined) return null
+
+  const target = expiresAtMs ?? FALLBACK_BETA_END_AT
+  const { expired, days, hours } = computeRemaining(target, now)
+
+  // 만료 — license-gate 가 BlockedScreen 전환을 담당하므로 여기선 안 보여줌
+  if (expired) return null
 
   const urgent = days <= 7
   const veryUrgent = days <= 3
 
+  // 타겟 종료일 텍스트 (사용자 친화)
+  const targetDate = new Date(target)
+  const targetLabel = `${targetDate.getFullYear()}.${String(targetDate.getMonth() + 1).padStart(2, '0')}.${String(targetDate.getDate()).padStart(2, '0')}`
+
   if (compact) {
+    // 일 단위 우선 / 1일 미만 → 시간 / 1시간 미만 → "<1h"
+    const compactLabel = days > 0 ? `D-${days}` : hours > 0 ? `${hours}h` : `<1h`
+    const titleText = days > 0 ? `${days}일` : hours > 0 ? `${hours}시간` : '1시간 미만'
     return (
       <div
         className="mx-1 my-2 rounded-lg px-2 py-1.5 text-center"
@@ -46,12 +130,19 @@ export function BetaCountdown({ compact = false }: Props) {
           backgroundColor: veryUrgent ? 'rgba(239,68,68,0.10)' : urgent ? 'rgba(232,107,69,0.10)' : 'var(--bg-tertiary)',
           color: veryUrgent ? '#ef4444' : urgent ? 'var(--accent)' : 'var(--text-tertiary)',
         }}
-        title={`베타 종료까지 ${days}일 ${hours}시간 남음`}
+        title={`라이센스 종료까지 ${titleText} 남음`}
       >
-        <div className="text-[10px] font-bold leading-none">D-{days}</div>
+        <div className="text-[10px] font-bold leading-none">{compactLabel}</div>
       </div>
     )
   }
+
+  // 메인 라벨: 1일 이상=일 / 1일 미만=시간 / 1시간 미만="1시간 미만 남음"
+  const mainLabel = days > 0
+    ? `라이센스 종료까지 ${days}일`
+    : hours > 0
+    ? `라이센스 종료까지 ${hours}시간`
+    : `라이센스 종료까지 1시간 미만 남음`
 
   return (
     <div
@@ -78,10 +169,10 @@ export function BetaCountdown({ compact = false }: Props) {
               color: veryUrgent ? '#ef4444' : urgent ? 'var(--accent)' : 'var(--text-secondary)',
             }}
           >
-            베타 종료까지 {days}일
+            {mainLabel}
           </div>
           <div className="text-[10px] text-text-tertiary leading-tight mt-0.5">
-            ~ 2026.06.22 자정
+            ~ {targetLabel}
           </div>
         </div>
       </div>

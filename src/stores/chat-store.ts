@@ -2,9 +2,6 @@ import { create } from 'zustand'
 import { useFolderStore } from './folder-store'
 import { useUIStore } from './ui-store'
 import { DEFAULT_CHAT_PROJECT_ID } from '../constants/rag'
-import { IS_BETA } from '../config/beta'
-
-const BETA_FORCE_DIFF_MODE = IS_BETA
 import {
   appendToUnassignedChatOrder,
   getUnassignedChatOrder,
@@ -540,8 +537,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   getDiffModeEnabled: (chatId) => {
-    // 베타: 항상 검토 모드 강제 — delta UI 가 안 떠 즉시 적용 되는 사고 방지.
-    if (BETA_FORCE_DIFF_MODE) return true
     const chat = get().chats.find((c) => c.id === chatId)
     return chat ? chat.diffModeEnabled : true
   },

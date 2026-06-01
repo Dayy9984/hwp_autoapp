@@ -37,12 +37,22 @@ function CodexStatusPanel() {
     setChecking(false)
   }, [])
 
-  useEffect(() => { check() }, [check])
+  useEffect(() => {
+    check()
+    // polling 5초 + window focus 시 즉시 check (외부 codex login 직후 빠른 detection)
+    const id = setInterval(() => check(), 5_000)
+    const onFocus = () => check()
+    window.addEventListener('focus', onFocus)
+    return () => { clearInterval(id); window.removeEventListener('focus', onFocus) }
+  }, [check])
 
   const handleLogin = async () => {
     setLoggingIn(true)
     try {
       await window.electronAPI.codex.login()
+      // 외부 cmd 창에서 device-auth/OAuth 진행 — 완료 시점 알 수 없음.
+      // polling + focus 가 자동 detection. 추가로 즉시 1회 check.
+      await new Promise((r) => setTimeout(r, 1500))
       await check()
     } catch {
       // ignore
@@ -392,7 +402,7 @@ export function SettingsModal() {
                     <div className="bg-bg-secondary p-5 rounded-xl border border-transparent space-y-3">
                       {BETA_CODEX_ONLY ? (
                         <>
-                          <p className="text-sm text-text-secondary">베타 기간 동안 <strong>Codex CLI 모드</strong>만 지원됩니다. ChatGPT 구독 계정으로 로그인하시면 별도 결제 없이 사용 가능합니다.</p>
+                          <p className="text-sm text-text-secondary"><strong>Codex CLI 모드</strong> — ChatGPT 구독 계정으로 로그인하시면 별도 API 결제 없이 사용 가능합니다.</p>
                           <CodexStatusPanel />
                         </>
                       ) : (

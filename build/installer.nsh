@@ -1,98 +1,70 @@
-; NSIS 인스톨러 — 라이센스 키 입력 페이지 추가
-; electron-builder.json의 nsis.include 옵션으로 통합
-
-!include "MUI2.nsh"
-!include "nsDialogs.nsh"
-!include "LogicLib.nsh"
-
-Var Dialog
-Var LicenseKeyLabel
-Var LicenseKeyInput
-Var LicenseKeyInfo
-Var LicenseKeyValue
+; NSIS 인스톨러 — oneClick 모드 보조.
+; 라이센스 키 입력은 앱 첫 실행 시 LicenseGate KeyInputScreen 이 받음.
+; 인스톨러는 별도 UI 없이 빠르게 설치 + 자동 실행 (electron-builder oneClick=true).
+;
+; 시작 직후 짧은 splash bitmap 으로 브랜드 인상 제공.
 
 ; ==================================================================
-; 커스텀 매크로 — Welcome 다음에 키 입력 페이지 삽입
+; preInit — installer 시작 직후 splash 표시 (1.6s)
 ; ==================================================================
-!macro customWelcomePage
-  ; (electron-builder 기본 Welcome 페이지 호출)
-!macroend
-
-; 라이센스 키 입력 페이지를 ComponentSelection 직전에 추가
 !macro customInit
-  ; 빈 매크로 (initialize hook)
+  ${If} ${Silent}
+    ; 자동 업데이트 silent 모드는 splash 표시 안 함 (UX 방해 차단)
+  ${Else}
+    InitPluginsDir
+    File /oname=$PLUGINSDIR\installer-splash.bmp "${BUILD_RESOURCES_DIR}\installer-splash.bmp"
+    ; NSIS 표준 splash plugin (NSIS 3.x 내장).
+    ; "splash::show DELAY_MS BMP_PATH" — DELAY_MS 만큼 BMP 표시 후 자동 종료.
+    splash::show 1600 $PLUGINSDIR\installer-splash
+    Pop $0
+  ${EndIf}
 !macroend
 
 ; ==================================================================
-; 키 입력 페이지
-; ==================================================================
-PageEx custom
-  PageCallbacks LicenseKeyPageCreate LicenseKeyPageLeave
-PageExEnd
-
-Function LicenseKeyPageCreate
-  !insertmacro MUI_HEADER_TEXT "라이센스 키 입력" "결제 후 발송된 라이센스 키를 입력하세요."
-
-  nsDialogs::Create 1018
-  Pop $Dialog
-  ${If} $Dialog == error
-    Abort
-  ${EndIf}
-
-  ${NSD_CreateLabel} 0 0 100% 12u "라이센스 키 (예: INSRT-XXXX-XXXX-XXXX-XXXX)"
-  Pop $LicenseKeyLabel
-
-  ${NSD_CreateText} 0 16u 100% 12u "$LicenseKeyValue"
-  Pop $LicenseKeyInput
-  ${NSD_SetTextLimit} $LicenseKeyInput 24
-
-  ${NSD_CreateLabel} 0 36u 100% 36u "키가 없으신 경우 카카오톡 오픈채팅으로 문의해주세요:$\r$\nhttps://open.kakao.com/o/sSm9ZXei$\r$\n$\r$\n* 키 입력을 건너뛰면 앱 첫 실행 시 입력 화면이 표시됩니다."
-  Pop $LicenseKeyInfo
-
-  nsDialogs::Show
-FunctionEnd
-
-Function LicenseKeyPageLeave
-  ${NSD_GetText} $LicenseKeyInput $LicenseKeyValue
-
-  ; 비어 있으면 건너뛰기 허용 (앱 첫 실행 시 입력)
-  ${If} $LicenseKeyValue == ""
-    Return
-  ${EndIf}
-
-  ; 형식 검증 INSRT-XXXX-XXXX-XXXX-XXXX (24자)
-  StrLen $0 $LicenseKeyValue
-  ${If} $0 != 24
-    MessageBox MB_ICONEXCLAMATION "라이센스 키는 24자입니다.$\r$\n형식: INSRT-XXXX-XXXX-XXXX-XXXX$\r$\n다시 확인해주세요. (비워두고 다음으로 가시면 앱 첫 실행 시 입력 가능합니다)"
-    Abort
-  ${EndIf}
-
-  StrCpy $1 $LicenseKeyValue 5
-  ${If} $1 != "INSRT"
-    MessageBox MB_ICONEXCLAMATION "라이센스 키는 INSRT-로 시작해야 합니다.$\r$\n다시 확인해주세요."
-    Abort
-  ${EndIf}
-FunctionEnd
-
-; ==================================================================
-; 설치 완료 시 키를 %APPDATA%\Inserty AI\.pending_license에 저장
+; customInstall — 파일 복사 끝나고 호출. VC++ Redistributable 확인/설치.
+;
+; 검사 로직:
+;   1) HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64\Installed 가 1 이면 skip
+;   2) 누락이면 번들된 vc_redist.x64.exe 실행 (/install /quiet /norestart)
+;      → vcredist 자체가 admin 필요해서 UAC 한 번 뜸 (첫 설치 사용자만)
+;      → 이미 깔린 사용자는 검사 통과 후 즉시 패스 (UAC 안 뜸)
 ; ==================================================================
 !macro customInstall
-  ${If} $LicenseKeyValue != ""
-    ; APPDATA 디렉토리 생성
-    CreateDirectory "$APPDATA\Inserty AI"
-    ; 키 파일 저장 (앱 첫 실행 시 자동 활성화 후 삭제)
-    FileOpen $0 "$APPDATA\Inserty AI\.pending_license" w
-    FileWrite $0 "$LicenseKeyValue"
-    FileClose $0
-    DetailPrint "라이센스 키 저장 완료"
+  ${If} ${Silent}
+    ; 자동 업데이트 silent 흐름에서는 이미 설치된 상태일 것이므로 skip
+  ${Else}
+    ; 64-bit 레지스트리 뷰로 강제 (NSIS 기본은 WOW64 redirect)
+    SetRegView 64
+    ReadRegDWORD $0 HKLM "SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" "Installed"
+    SetRegView default
+
+    ${If} $0 == 1
+      DetailPrint "Visual C++ Redistributable 이미 설치됨 — skip"
+    ${Else}
+      DetailPrint "Visual C++ Redistributable 설치 중... (1회만 수행)"
+      InitPluginsDir
+      File /oname=$PLUGINSDIR\vc_redist.x64.exe "${BUILD_RESOURCES_DIR}\vc_redist.x64.exe"
+      ; /quiet: UI 없음 (UAC 만 뜸), /norestart: 재시작 안 묻기
+      ExecWait '"$PLUGINSDIR\vc_redist.x64.exe" /install /quiet /norestart' $1
+      ; 0 = 성공, 1638 = 더 최신 버전 이미 설치됨 (성공으로 간주), 3010 = 성공 (재시작 필요)
+      DetailPrint "Visual C++ Redistributable 설치 종료 코드: $1"
+      Delete "$PLUGINSDIR\vc_redist.x64.exe"
+    ${EndIf}
   ${EndIf}
 !macroend
 
 ; ==================================================================
-; 언인스톨 시 pending_license + license_cache 모두 제거
-; ==================================================================
+; 언인스톨 시 라이센스 캐시 처리.
+;
+; ${Silent} 분기:
+;   - Silent uninstaller 호출 = 업데이트/재설치 흐름 (NSIS 가 새 Setup.exe 실행 시
+;     구 uninstaller 를 silent 로 먼저 돌림). cache 보존 필수 — 안 그러면 매 업데이트마다
+;     라이센스 재입력 강제됨.
+;   - Non-silent uninstaller 호출 = 사용자가 Programs and Features 에서 명시적으로 제거.
+;     "완전히 지우고 싶다" 는 의도 → cache 삭제하여 다음 설치 시 새 라이센스 입력 가능.
 !macro customUnInstall
-  Delete "$APPDATA\Inserty AI\.pending_license"
-  Delete "$APPDATA\Inserty AI\.license_cache"
+  ${IfNot} ${Silent}
+    Delete "$APPDATA\Inserty AI\.pending_license"
+    Delete "$APPDATA\Inserty AI\.license_cache"
+  ${EndIf}
 !macroend
