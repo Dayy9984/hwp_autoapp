@@ -49,7 +49,7 @@ def _to_score(value) -> "float | None":
         return None
 
 
-def run_verification(hwp, *, request_id, user_intent, op_list, model) -> None:
+def run_verification(hwp, *, request_id, user_intent, op_list, model, session=None) -> None:
     """편집 후 문서 검증 — 백그라운드 스레드 진입점. 절대 raise 안 함.
 
     Args:
@@ -58,6 +58,10 @@ def run_verification(hwp, *, request_id, user_intent, op_list, model) -> None:
         user_intent: 유저의 자연어 지시 (검증 정답지).
         op_list: AI 가 적용한 op 목록 (완전성 체크 보조용).
         model: 비전 모델 이름.
+        session: finalize_edits 가 end_session() 이전에 캡처해 넘긴 trace 세션.
+            None 이면 get_session() 으로 fallback. 캡처된 세션은 _CURRENT_SESSION 이
+            nulled 된 뒤에도 자체 license_token 으로 send_trace/_post_async 전송 가능 →
+            end_session() race 로 인한 telemetry 유실 방지.
     """
     try:
         # 1. 렌더 (실패/빈 list 면 abort).
@@ -124,7 +128,9 @@ def run_verification(hwp, *, request_id, user_intent, op_list, model) -> None:
 
         # 5. 전송 (집계 → verify, 렌더 이미지 → upload_render).
         #    동의 게이팅은 Worker 가 license_key 로 판정 — 클라는 항상 전송 시도.
-        s = get_session()
+        #    캡처된 session 우선 — finalize_edits 의 end_session() race 회피.
+        #    get_session() 재조회 금지(이미 _CURRENT_SESSION=None 일 수 있음).
+        s = session if session is not None else get_session()
         if s:
             s.verify(result)
             s.upload_render(request_id, pngs)

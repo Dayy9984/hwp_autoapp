@@ -5921,6 +5921,15 @@ class DocumentProcessor:
                     from services.verification_service import run_verification
                     connector = self._ensure_connector()
                     verify_hwp = getattr(connector, "hwp", connector)
+                    # 현재 trace 세션을 finally 의 end_session() 이전에 캡처해 스레드로 전달.
+                    # 캡처 세션은 _CURRENT_SESSION 이 nulled 된 뒤에도 자체 토큰으로 전송 가능 →
+                    # get_session() race 로 인한 verify telemetry 유실 방지.
+                    _vs = None
+                    try:
+                        from services.beta_trace import get_session
+                        _vs = get_session()
+                    except Exception:
+                        pass
                     threading.Thread(
                         target=run_verification,
                         kwargs={
@@ -5929,6 +5938,7 @@ class DocumentProcessor:
                             "user_intent": getattr(self, "_verify_user_intent", None),
                             "op_list": list(getattr(self, "_verify_ops", []) or []),
                             "model": getattr(self, "_verify_model", "gpt-5.1"),
+                            "session": _vs,
                         },
                         daemon=True,
                     ).start()
