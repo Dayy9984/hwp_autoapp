@@ -11,6 +11,7 @@
 import hashlib
 import json
 import logging
+import os
 import threading
 import time
 from typing import Any
@@ -19,7 +20,7 @@ from urllib.error import URLError
 
 log = logging.getLogger(__name__)
 
-WORKER_BASE = "https://inserty-beta-worker.snsoffice.workers.dev"
+WORKER_BASE = os.environ.get("INSERTY_TRACE_BASE", "https://inserty-beta-worker.snsoffice.workers.dev").rstrip("/")
 UPLOAD_TIMEOUT_S = 30
 TRACE_TIMEOUT_S = 5
 # Cloudflare WAF 가 기본 Python-urllib UA 차단 (error 1010) — 앱 식별 UA 사용.
@@ -170,7 +171,8 @@ class HwpTraceSession:
         return _StepCtx(self, step_name, extra)
 
     def cvd(self, step: str, cvd_chars: int | None = None, cvd_blocks: int | None = None,
-            duration_ms: int | None = None, error_type: str | None = None, error_msg: str | None = None) -> None:
+            duration_ms: int | None = None, error_type: str | None = None, error_msg: str | None = None,
+            request_id: str | None = None) -> None:
         self.queue.append({
             "type": "cvd_step",
             "session_id": self.session_id,
@@ -181,13 +183,15 @@ class HwpTraceSession:
             "duration_ms": duration_ms,
             "error_type": error_type,
             "error_msg": error_msg,
+            "request_id": request_id,
         })
         if len(self.queue) >= 20:
             self.flush()
 
     def block_cmd(self, command: str, target_id: str | None = None, args: Any = None,
                   applied: int = 0, success: bool | None = None, duration_ms: int | None = None,
-                  error_type: str | None = None, error_msg: str | None = None) -> None:
+                  error_type: str | None = None, error_msg: str | None = None,
+                  request_id: str | None = None) -> None:
         self.queue.append({
             "type": "block_cmd",
             "session_id": self.session_id,
@@ -200,9 +204,31 @@ class HwpTraceSession:
             "duration_ms": duration_ms,
             "error_type": error_type,
             "error_msg": error_msg,
+            "request_id": request_id,
         })
         if len(self.queue) >= 20:
             self.flush()
+
+    def response_decision(self, decision: str | None = None, request_id: str | None = None,
+                          chat_id: str | None = None, message_id: str | None = None,
+                          cvd_bytes: int | None = None, delta_count: int | None = None,
+                          insert_count: int | None = None, delete_count: int | None = None,
+                          format_count: int | None = None, failed_count: int | None = None) -> None:
+        self.queue.append({
+            "type": "response_decision", "session_id": self.session_id, "doc_hash": self.doc_hash,
+            "request_id": request_id, "chat_id": chat_id, "message_id": message_id, "decision": decision,
+            "cvd_bytes": cvd_bytes, "delta_count": delta_count, "insert_count": insert_count,
+            "delete_count": delete_count, "format_count": format_count, "failed_count": failed_count,
+        })
+        if len(self.queue) >= 20:
+            self.flush()
+
+    def consent_record(self, consented: bool, privacy_policy_version: str | None = None) -> None:
+        self.queue.append({
+            "type": "consent_record", "session_id": self.session_id, "doc_hash": self.doc_hash,
+            "consented": consented, "privacy_policy_version": privacy_policy_version,
+        })
+        self.flush()
 
     def extract(self, step: str, *, duration_ms: int | None = None, doc_size_kb: int | None = None,
                 page_count: int | None = None, has_tables: bool = False, has_images: bool = False,
