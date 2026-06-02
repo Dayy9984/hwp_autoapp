@@ -7348,6 +7348,12 @@ function generateRejectReason(result: any, type: 'all' | 'partial'): string {
 
 
 
+// 베타 진단 데이터 동의 (verify-loop) — COM 프로세스로 전달하여 consent_record emit
+ipcMain.handle('consent:set', async (_, { consented }: { consented: boolean }) => {
+  return pythonBridge ? pythonBridge.call('consent:set', { consented }) : { ok: false }
+})
+
+
 // CVD 추출 (Template Pair)
 
 

@@ -165,7 +165,9 @@ export function SettingsModal() {
     setOpenaiDefaultModel,
     setOpenaiEmbeddingModel,
     connectionMode,
-    setConnectionMode
+    setConnectionMode,
+    diagnosticConsent,
+    setDiagnosticConsent
   } = useSettingsStore()
   const [activeTab, setActiveTab] = useState<SettingsTab>('general')
   const [activeAiTab, setActiveAiTab] = useState<AiTab>('chat')
@@ -390,6 +392,33 @@ export function SettingsModal() {
                       <p style={{ fontSize: `${textSize}px` }} className="text-text transition-all duration-200">
                         글자 크기 미리보기입니다. Inserty는 사용자의 편안한 독서 환경을 지원합니다.
                       </p>
+                    </div>
+                  </section>
+
+                  {/* Diagnostic Data Consent (Beta) */}
+                  <section>
+                    <h3 className="text-sm font-semibold text-text mb-4 uppercase tracking-wider">개인정보</h3>
+                    <div className="flex items-center justify-between gap-4 bg-bg-secondary p-5 rounded-xl border border-transparent">
+                      <div className="min-w-0">
+                        <div className="font-medium text-text">익명 진단 데이터 제공 동의 (베타 품질 개선)</div>
+                        <div className="text-xs text-text-tertiary mt-1">
+                          편집 품질 개선을 위해 식별 정보를 제외한 익명 진단 데이터를 전송합니다. 언제든지 끌 수 있습니다.
+                        </div>
+                      </div>
+                      <div className="inline-flex p-1 bg-bg rounded-xl border border-transparent shrink-0">
+                        <button
+                          onClick={() => setDiagnosticConsent(false)}
+                          className={`px-4 py-2 text-sm rounded-lg transition-colors ${!diagnosticConsent ? 'bg-bg-secondary text-text shadow-sm font-medium' : 'text-text-tertiary hover:text-text'}`}
+                        >
+                          끄기
+                        </button>
+                        <button
+                          onClick={() => setDiagnosticConsent(true)}
+                          className={`px-4 py-2 text-sm rounded-lg transition-colors ${diagnosticConsent ? 'bg-bg-secondary text-text shadow-sm font-medium' : 'text-text-tertiary hover:text-text'}`}
+                        >
+                          켜기
+                        </button>
+                      </div>
                     </div>
                   </section>
                 </div>

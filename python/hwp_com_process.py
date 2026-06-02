@@ -6748,6 +6748,16 @@ def handle_request(processor: DocumentProcessor, request: dict) -> dict:
             except Exception as e:
                 result["result"] = {"ok": False, "error": str(e)}
 
+        elif method == "consent:set":
+            # 설정 UI 동의 토글 → consent_record 이벤트 emit
+            try:
+                from services.beta_trace import get_session, start_session, _LICENSE_TOKEN, _DEVICE_ID, HwpTraceSession
+                s = get_session() or HwpTraceSession(_LICENSE_TOKEN, _DEVICE_ID, "", None)
+                s.consent_record(bool(params.get("consented")), "v1")
+                result["result"] = {"ok": True}
+            except Exception as e:
+                result["result"] = {"ok": False, "error": str(e)}
+
         elif method == "open":
             result["result"] = processor.open_document(params.get("file"))
 
