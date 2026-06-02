@@ -29,13 +29,23 @@ caller prints a clear "no corpus found" message rather than crashing.
 
 import json
 import os
+import subprocess
 import sqlite3
+import sys
+import tempfile
 from typing import Any, Dict, List, Optional
 
 # Candidate template file names inside a pair dir (first match wins).
 _TEMPLATE_NAMES = ("template.hwp", "template.hwpx", "template.HWP", "template.HWPX")
 _DIFF_NAME = "diff.json"
 _FILLED_CVD_NAME = "filled.cvd.md"
+
+# R2 / D1 (Cloudflare) source for real user HWP forms.
+_R2_BUCKET = "inserty-ai"
+_D1_DB = "inserty-events"
+_CF_ACCOUNT_ID = "a7651f53f22f1c6ec870c4c041a13235"
+# Default instruction for forms with no ground truth (MODE full / B verdicts only).
+DEFAULT_R2_INSTRUCTION = "이 양식의 빈 입력 칸들을 적절한 예시 데이터로 채워줘"
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +284,139 @@ def load_from_manifest(manifest_path: str) -> List[Dict[str, Any]]:
             "filled_cvd_path": filled,
             "instruction": raw.get("instruction"),
             "source": "manifest",
+        })
+    return _dedupe_names(cases)
+
+
+# ---------------------------------------------------------------------------
+# Cloudflare R2 / D1 source (real user HWP forms, by content hash)
+# ---------------------------------------------------------------------------
+
+def _wrangler_env() -> Dict[str, str]:
+    env = dict(os.environ)
+    env.setdefault("CLOUDFLARE_ACCOUNT_ID", _CF_ACCOUNT_ID)
+    # Keep wrangler non-interactive.
+    env.setdefault("CI", "1")
+    return env
+
+
+def _run_wrangler(args: List[str], capture: bool = True) -> subprocess.CompletedProcess:
+    """Run ``npx wrangler <args>`` (shell on Windows for the npx shim).
+
+    Decodes stdout/stderr as UTF-8 explicitly — wrangler emits UTF-8 (emoji
+    banner, box chars) which the Windows console codec (cp949) cannot decode.
+    """
+    cmd = ["npx", "wrangler", *args]
+    return subprocess.run(
+        cmd,
+        env=_wrangler_env(),
+        capture_output=capture,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        shell=(os.name == "nt"),
+        timeout=180,
+    )
+
+
+def _d1_latest_keys(limit: int) -> List[str]:
+    """Return the ``r2_key`` of the latest ``limit`` rows in ``hwp_uploads``."""
+    sql = (
+        "SELECT r2_key FROM hwp_uploads "
+        f"ORDER BY last_seen_at DESC LIMIT {int(limit)}"
+    )
+    proc = _run_wrangler([
+        "d1", "execute", _D1_DB, "--remote", "--json", "--command", sql,
+    ])
+    if proc.returncode != 0:
+        print(f"[corpus] d1 query failed: {proc.stderr.strip()[:500]}", file=sys.stderr)
+        return []
+    # wrangler prints npm warnings before the JSON; locate the first '[' / '{'.
+    out = proc.stdout or ""
+    start = min(
+        (i for i in (out.find("["), out.find("{")) if i != -1),
+        default=-1,
+    )
+    if start == -1:
+        return []
+    try:
+        data = json.loads(out[start:])
+    except json.JSONDecodeError:
+        return []
+    # Shape: [{"results": [{"r2_key": ...}], ...}]
+    rows: List[Dict[str, Any]] = []
+    if isinstance(data, list):
+        for block in data:
+            if isinstance(block, dict):
+                rows.extend(block.get("results") or [])
+    elif isinstance(data, dict):
+        rows.extend(data.get("results") or [])
+    keys = [r.get("r2_key") for r in rows if isinstance(r, dict) and r.get("r2_key")]
+    return [k for k in keys if k]
+
+
+def _r2_pull(r2_key: str, dest_dir: str) -> Optional[str]:
+    """Download ``inserty-ai/<r2_key>`` into ``dest_dir``. Returns local path."""
+    # Local filename: last path segment of the key (the hash.hwp).
+    fname = os.path.basename(r2_key) or "form.hwp"
+    local_path = os.path.join(dest_dir, fname)
+    proc = _run_wrangler([
+        "r2", "object", "get", f"{_R2_BUCKET}/{r2_key}",
+        "--file", local_path, "--remote",
+    ])
+    if proc.returncode != 0 or not os.path.isfile(local_path):
+        print(f"[corpus] r2 get failed for {r2_key}: {proc.stderr.strip()[:500]}",
+              file=sys.stderr)
+        return None
+    return local_path
+
+
+def load_from_r2(
+    keys: Optional[List[str]] = None,
+    latest: int = 0,
+    instruction: Optional[str] = None,
+    dest_dir: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Pull real user HWP forms from R2 and build ground-truth-free cases.
+
+    Args:
+        keys: explicit ``r2_key`` list (e.g. ``["hwp/<hash>.hwp", ...]``).
+        latest: if > 0 and ``keys`` is empty, pull the latest N from D1.
+        instruction: natural-language intent (default: fill blank cells).
+        dest_dir: where to download (a fresh temp dir if None).
+
+    Cases have NO ground truth (``diff_json_path`` / ``filled_cvd_path`` = None),
+    so they are only meaningful for MODE full / MODE B (vision) verdicts.
+    """
+    if not keys:
+        if latest and latest > 0:
+            keys = _d1_latest_keys(latest)
+        else:
+            keys = []
+    if not keys:
+        return []
+
+    if dest_dir is None:
+        dest_dir = tempfile.mkdtemp(prefix="eval_r2_")
+    os.makedirs(dest_dir, exist_ok=True)
+
+    instr = instruction or DEFAULT_R2_INSTRUCTION
+    cases: List[Dict[str, Any]] = []
+    for key in keys:
+        local = _r2_pull(key, dest_dir)
+        if not local:
+            continue
+        # Short, stable name from the content hash (first 12 chars).
+        base = os.path.splitext(os.path.basename(key))[0]
+        name = f"r2-{base[:12]}"
+        cases.append({
+            "name": name,
+            "template_hwp_path": local,
+            "diff_json_path": None,
+            "filled_cvd_path": None,
+            "instruction": instr,
+            "source": "r2",
+            "r2_key": key,
         })
     return _dedupe_names(cases)
 

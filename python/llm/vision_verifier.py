@@ -95,6 +95,48 @@ def _build_default_client() -> Any:
         return None
 
 
+def _is_codex_client(client: Any) -> bool:
+    """True if ``client`` targets the codex backend (chatgpt.com/backend-api/codex).
+
+    The codex backend requires ``stream=True`` and an ``instructions`` field on
+    responses.create — a plain (non-stream) call returns HTTP 400. We detect it
+    from the client's base_url so the same call site works for both API-key and
+    codex (OAuth) clients.
+    """
+    try:
+        base = str(getattr(client, "base_url", "") or "")
+        return "chatgpt.com/backend-api/codex" in base
+    except Exception:
+        return False
+
+
+def _stream_output_text(stream: Any) -> str:
+    """Collect output text from a streaming Responses API iterator (codex)."""
+    text = ""
+    try:
+        for event in stream:
+            delta = getattr(event, "delta", None)
+            if isinstance(delta, str):
+                text += delta
+                continue
+            # Some SDK builds emit a terminal event carrying the full response.
+            resp = getattr(event, "response", None)
+            if resp is not None:
+                full = getattr(resp, "output_text", "") or ""
+                if full and len(full) > len(text):
+                    text = full
+    except Exception as e:
+        print(f"[vision_verifier] stream read failed: {e}", file=sys.stderr)
+    finally:
+        closer = getattr(stream, "close", None)
+        if callable(closer):
+            try:
+                closer()
+            except Exception:
+                pass
+    return text
+
+
 def _extract_output_text(response: Any) -> str:
     """Responses API 응답에서 텍스트 추출 (openai_client.py 패턴 재사용)."""
     output_text = getattr(response, "output_text", "") or ""
@@ -180,8 +222,22 @@ def verify_vision(
 
         input_payload = [{"type": "message", "role": "user", "content": content}]
 
-        response = client.responses.create(model=model, input=input_payload)
-        text = _extract_output_text(response)
+        if _is_codex_client(client):
+            # Codex backend: requires instructions + stream=True (else HTTP 400).
+            stream = client.responses.create(
+                model=model,
+                instructions=(
+                    "당신은 한국어 양식 문서를 사람처럼 판독하는 비전 검증기다. "
+                    "지시에 따라 JSON 한 개만 출력하라."
+                ),
+                input=input_payload,
+                store=False,
+                stream=True,
+            )
+            text = _stream_output_text(stream)
+        else:
+            response = client.responses.create(model=model, input=input_payload)
+            text = _extract_output_text(response)
         parsed = _parse_json(text)
         if not isinstance(parsed, dict):
             return {"items": [], "error": "parse"}

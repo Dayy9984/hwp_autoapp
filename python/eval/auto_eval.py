@@ -225,12 +225,264 @@ def _set_openai_key_for_vision(api_key: str) -> None:
         print(f"[auto_eval] could not set OpenAI key: {e}", file=sys.stderr)
 
 
+def _set_codex_for_vision(token: str, account_id: str) -> None:
+    """Inject codex OAuth creds so vision_verifier._build_default_client builds the
+    SAME codex backend client (chatgpt.com/backend-api/codex) the app uses.
+
+    NEVER logs the token.
+    """
+    try:
+        from llm import streaming_client as sc
+        ctx = getattr(sc, "_rag_context", None)
+        if not isinstance(ctx, dict):
+            sc._rag_context = {}
+            ctx = sc._rag_context
+        ctx["openai_api_key"] = token        # codex OAuth access_token
+        ctx["codex_mode"] = True
+        ctx["codex_account_id"] = account_id
+    except Exception as e:  # pragma: no cover
+        print(f"[auto_eval] could not set codex creds for vision: {e}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# MODE full — codex LLM generates edits, apply via execute_delta (in-process
+# replica of agent_process._stream_llm command->execute_delta wiring).
+# ---------------------------------------------------------------------------
+
+# Edit actions the app's main process actually forwards to execute_delta
+# (electron/main/index.ts allowedDeltaActions + append_table_row). thinking /
+# message are non-edit and skipped, mirroring the app exactly.
+_APPLY_ACTIONS = {
+    "edit_document", "format_text", "insert_note", "insert_source_ref",
+    "write_text", "line_break", "append_table_row",
+}
+
+
+def _stream_codex_edits(
+    processor,
+    cvd_html: str,
+    instruction: str,
+    context_id: Optional[str],
+    token: str,
+    account_id: str,
+    model: str,
+) -> Dict[str, Any]:
+    """Drive the codex LLM to generate edit commands and apply each via
+    execute_delta. Replicates agent_process._stream_llm's command wiring
+    in-process (no stdio, no license gate, no telemetry — eval only).
+
+    Returns a summary dict: {commands, applied, edited, ops, messages, errors,
+    stream_success, stream_error, token_usage}.
+    """
+    from llm.streaming_client import get_streaming_client, StreamingCommand
+
+    client = get_streaming_client(token, codex_mode=True, codex_account_id=account_id)
+    if model:
+        client.model = model
+
+    ops: List[Dict[str, Any]] = []
+    messages: List[str] = []
+    counters = {"commands": 0, "applied": 0, "edited": 0, "errors": 0}
+
+    def on_command(cmd: "StreamingCommand") -> None:
+        action = cmd.action or ""
+        if action in ("thinking", "message"):
+            if action == "message":
+                txt = cmd.message or cmd.content
+                if txt:
+                    messages.append(txt)
+            return
+        if action not in _APPLY_ACTIONS:
+            return
+        counters["commands"] += 1
+        # Build the delta exactly as the main process does: pass the full delta
+        # event (action/id/content/message/metadata/rows) + context_id to
+        # execute_delta, which reads metadata.operation as the method_type.
+        delta: Dict[str, Any] = {
+            "action": action,
+            "id": cmd.id,
+            "content": cmd.content,
+            "message": cmd.message,
+            "metadata": dict(cmd.metadata or {}),
+            "rows": cmd.rows,
+        }
+        if context_id:
+            delta["context_id"] = context_id
+        try:
+            result = processor.execute_delta(delta)
+        except Exception as e:  # pragma: no cover - COM runtime
+            result = {"success": False, "error": str(e)}
+        if isinstance(result, dict):
+            if result.get("success"):
+                counters["applied"] += 1
+                if result.get("edited"):
+                    counters["edited"] += 1
+            else:
+                counters["errors"] += 1
+        ops.append({
+            "id": cmd.id,
+            "op": (cmd.metadata or {}).get("operation") or action,
+            "action": action,
+            "content": (cmd.content or "")[:200],
+            "result": result,
+        })
+
+    stream_success = False
+    stream_error = None
+    token_usage: Dict[str, Any] = {}
+    try:
+        res = client.generate_commands_streaming(
+            html=cvd_html,
+            prompt=instruction,
+            on_command=on_command,
+            use_delta=True,
+            use_html=False,
+            compact_mode=True,
+            enable_file_search=False,
+        )
+        stream_success = bool(getattr(res, "success", False))
+        token_usage = getattr(res, "token_usage", {}) or {}
+        if not stream_success:
+            stream_error = getattr(res, "error", None) or getattr(res, "status", None)
+    except Exception as e:
+        stream_error = str(e)
+        print(f"[auto_eval] codex stream failed: {e}", file=sys.stderr)
+
+    return {
+        "commands": counters["commands"],
+        "applied": counters["applied"],
+        "edited": counters["edited"],
+        "apply_errors": counters["errors"],
+        "ops": ops,
+        "messages": messages,
+        "stream_success": stream_success,
+        "stream_error": stream_error,
+        "token_usage": token_usage,
+    }
+
+
+def _run_case_full(
+    case: Dict[str, Any],
+    record: Dict[str, Any],
+    vision_model: str,
+    codex_token: Optional[str],
+    codex_account_id: Optional[str],
+    edit_model: str,
+) -> Dict[str, Any]:
+    """MODE full: codex edit-gen -> apply -> render -> codex vision verify.
+
+    Fully guarded; never raises. No ground truth needed (R2 forms).
+    """
+    name = case.get("name", "unknown")
+    instruction = case.get("instruction") or corpus_mod.DEFAULT_R2_INSTRUCTION
+
+    if not codex_token:
+        record["error"] = "no_codex_credentials"
+        record["finished_at"] = datetime.now(timezone.utc).isoformat()
+        return record
+
+    processor = connector = hwp = temp_copy = None
+    try:
+        processor, connector, hwp, temp_copy = _open_headless_processor(
+            case["template_hwp_path"]
+        )
+
+        prep = processor.prepare_context(prompt=instruction)
+        if not isinstance(prep, dict) or not prep.get("success"):
+            raise RuntimeError(f"prepare_context failed: {prep}")
+        context_id = prep.get("context_id")
+        # The app feeds document_graph_json to the LLM (electron/main/index.ts
+        # docContent = document_graph_json). Fall back to cvd/html for older builds.
+        cvd_html = (
+            prep.get("document_graph_json")
+            or prep.get("cvd")
+            or prep.get("html")
+            or ""
+        )
+        if isinstance(cvd_html, (dict, list)):
+            import json as _json
+            cvd_html = _json.dumps(cvd_html, ensure_ascii=False)
+        record["cvd_chars"] = len(cvd_html)
+        record["cvd_source"] = (
+            "document_graph_json" if prep.get("document_graph_json")
+            else ("cvd" if prep.get("cvd") else ("html" if prep.get("html") else "none"))
+        )
+        record["allowed_elements"] = len(prep.get("allowed_elements") or [])
+        # The final prompt from prepare_context already wraps reference material.
+        effective_instruction = prep.get("prompt") or instruction
+        if not cvd_html:
+            raise RuntimeError("prepare_context returned empty CVD payload "
+                               "(document_graph_json/cvd/html all empty)")
+
+        # --- codex LLM generates edits, applied in-process via execute_delta ---
+        llm = _stream_codex_edits(
+            processor, cvd_html, effective_instruction, context_id,
+            codex_token, codex_account_id or "", edit_model,
+        )
+        record["llm"] = {
+            "stream_success": llm["stream_success"],
+            "stream_error": llm["stream_error"],
+            "commands": llm["commands"],
+            "applied": llm["applied"],
+            "edited": llm["edited"],
+            "apply_errors": llm["apply_errors"],
+            "messages": llm["messages"][:5],
+            "token_usage": llm["token_usage"],
+            "ops": [
+                {"id": o["id"], "action": o["action"], "op": o["op"],
+                 "content": o["content"],
+                 "ok": bool(isinstance(o["result"], dict) and o["result"].get("success")),
+                 "edited": bool(isinstance(o["result"], dict) and o["result"].get("edited")),
+                 "error": (o["result"].get("error") if isinstance(o["result"], dict) else None)}
+                for o in llm["ops"]
+            ],
+        }
+        record["applied_ops"] = llm["applied"]
+
+        # --- render + codex vision verify (same codex client) ---
+        # Vision uses the plain user intent as the answer key (not the
+        # reference-wrapped prompt), per vision_verifier spec.
+        record["vision"] = _run_vision(processor, instruction, llm["ops"], vision_model)
+    except Exception as e:
+        record["error"] = str(e)
+        record["trace"] = traceback.format_exc()
+        print(f"[auto_eval] case '{name}' (full) failed: {e}", file=sys.stderr)
+    finally:
+        if hwp is not None:
+            try:
+                hwp.quit()
+            except Exception:
+                pass
+        if temp_copy:
+            try:
+                from engine.connection.hwp_file_opener import cleanup_temp_open_copy
+                cleanup_temp_open_copy(temp_copy)
+            except Exception:
+                pass
+
+    record["finished_at"] = datetime.now(timezone.utc).isoformat()
+    return record
+
+
 # ---------------------------------------------------------------------------
 # Per-case execution (each fully guarded — a bad case never aborts the run)
 # ---------------------------------------------------------------------------
 
-def run_case(case: Dict[str, Any], mode: str, vision_model: str) -> Dict[str, Any]:
-    """Run a single case through the pipeline. Never raises."""
+def run_case(
+    case: Dict[str, Any],
+    mode: str,
+    vision_model: str,
+    codex_token: Optional[str] = None,
+    codex_account_id: Optional[str] = None,
+    edit_model: str = "gpt-5.1",
+) -> Dict[str, Any]:
+    """Run a single case through the pipeline. Never raises.
+
+    mode A    — deterministic diff replay + score (needs diff.json).
+    mode B    — A + vision verify.
+    mode full — codex LLM generates edits (no ground truth required) -> apply
+                -> render -> codex vision verify. The unattended codex path.
+    """
     name = case.get("name", "unknown")
     started = datetime.now(timezone.utc).isoformat()
     record: Dict[str, Any] = {
@@ -238,12 +490,21 @@ def run_case(case: Dict[str, Any], mode: str, vision_model: str) -> Dict[str, An
         "mode": mode,
         "source": case.get("source"),
         "template_hwp_path": case.get("template_hwp_path"),
+        "r2_key": case.get("r2_key"),
+        "instruction": case.get("instruction"),
         "started_at": started,
         "error": None,
         "score": None,
         "vision": None,
+        "llm": None,
     }
 
+    if mode == "full":
+        return _run_case_full(
+            case, record, vision_model, codex_token, codex_account_id, edit_model
+        )
+
+    # ---- MODE A / B (ground-truth replay) ----
     # Resolve ground-truth changes (diff.json preferred).
     changes = corpus_mod.load_diff_changes(case.get("diff_json_path"))
     if not changes:
@@ -370,11 +631,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         prog="eval.auto_eval",
         description="Headless auto-eval harness for the HWP verify loop.",
     )
-    p.add_argument("--corpus", required=True,
-                   help="Manifest .json, SQLite .db, or directory to scan for template_pairs.")
-    p.add_argument("--mode", choices=["A", "B"], default="A",
+    p.add_argument("--corpus", default=None,
+                   help="Manifest .json, SQLite .db, or directory to scan for template_pairs. "
+                        "Optional when --r2-keys / --r2-latest is given.")
+    p.add_argument("--mode", choices=["A", "B", "full"], default="A",
                    help="A = deterministic ground-truth replay (default, no key). "
-                        "B = + vision verification (needs --openai-key).")
+                        "B = + vision verification (needs --openai-key). "
+                        "full = codex LLM edit-gen -> apply -> render -> codex vision "
+                        "verify (no API key; uses ~/.codex/auth.json).")
+    p.add_argument("--r2-keys", default=None,
+                   help="Comma-separated R2 keys (e.g. 'hwp/<hash>.hwp,...') to pull "
+                        "from the inserty-ai bucket as cases.")
+    p.add_argument("--r2-latest", type=int, default=0,
+                   help="Pull the latest N HWP forms from D1 hwp_uploads (R2 source).")
+    p.add_argument("--r2-instruction", default=None,
+                   help="Instruction for R2 cases (default: fill blank cells).")
+    p.add_argument("--edit-model", default="gpt-5.5",
+                   help="Codex edit-generation model for MODE full. The codex "
+                        "ChatGPT backend only supports gpt-5.5 (default gpt-5.5).")
     p.add_argument("--out", default="results",
                    help="Output directory for eval-<tag>.jsonl and summary.json.")
     p.add_argument("--tag", default="run",
@@ -394,8 +668,57 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _print_full_table(case_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """MODE full reporter — no ground truth; summarize codex edits + vision."""
+    print("\n=== Auto-Eval Results (MODE full: codex edit -> vision verify) ===")
+    header = (f"{'CASE':<20} {'STREAM':<7} {'CMDS':>4} {'APPL':>4} {'EDIT':>4} "
+              f"{'VISION':<10} {'V-ITEMS':<22}")
+    print(header)
+    print("-" * len(header))
+    n_cases = len(case_results)
+    n_err = n_vision_ok = n_vision_err = 0
+    total_applied = total_cmds = 0
+    for case in case_results:
+        name = (case.get("name") or "")[:20]
+        llm = case.get("llm") or {}
+        vis = case.get("vision") or {}
+        if case.get("error"):
+            n_err += 1
+            print(f"{name:<20} {'ERR':<7} {'-':>4} {'-':>4} {'-':>4} "
+                  f"{'-':<10} {str(case.get('error'))[:22]}")
+            continue
+        stream = "ok" if llm.get("stream_success") else "fail"
+        cmds = int(llm.get("commands", 0) or 0)
+        appl = int(llm.get("applied", 0) or 0)
+        edit = int(llm.get("edited", 0) or 0)
+        total_cmds += cmds
+        total_applied += appl
+        if vis.get("error"):
+            n_vision_err += 1
+            vstat = "ERR"
+            vitems = str(vis.get("error"))[:22]
+        else:
+            n_vision_ok += 1
+            vstat = "ok"
+            ov = vis.get("overall") or {}
+            vitems = (f"ok={ov.get('correct',0)} wl={ov.get('wrong_location',0)} "
+                      f"wc={ov.get('wrong_content',0)} miss={ov.get('missing',0)}")[:22]
+        print(f"{name:<20} {stream:<7} {cmds:>4} {appl:>4} {edit:>4} "
+              f"{vstat:<10} {vitems:<22}")
+    print("-" * len(header))
+    print(f"cases={n_cases} error={n_err} | total cmds={total_cmds} applied={total_applied} | "
+          f"vision ok={n_vision_ok} err={n_vision_err}")
+    return {
+        "case_count": n_cases, "error_count": n_err,
+        "total_commands": total_cmds, "total_applied": total_applied,
+        "vision_ok": n_vision_ok, "vision_error": n_vision_err,
+    }
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
+
+    codex_token = codex_account_id = None
 
     if args.mode == "B":
         key = args.openai_key or os.environ.get("OPENAI_API_KEY")
@@ -405,22 +728,53 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 2
         _set_openai_key_for_vision(key)
 
-    cases = corpus_mod.load_corpus(
-        args.corpus,
-        user_data_path=args.user_data_path,
-        project_id=args.project_id,
-    )
+    if args.mode == "full":
+        # codex OAuth creds from ~/.codex/auth.json (NEVER printed).
+        from eval.codex_auth import get_codex_credentials
+        codex_token, codex_account_id = get_codex_credentials()
+        if not codex_token:
+            print("[auto_eval] MODE full requires codex login "
+                  "(~/.codex/auth.json with tokens.access_token). "
+                  "Run `codex login`.", file=sys.stderr)
+            return 2
+        # Same codex client for the vision verifier (no separate key).
+        _set_codex_for_vision(codex_token, codex_account_id or "")
+        # The codex ChatGPT backend only supports gpt-5.5. If the vision model
+        # is still at its non-codex default, switch it so MODE B vision works.
+        if args.vision_model == "gpt-5.1":
+            args.vision_model = "gpt-5.5"
+        print(f"[auto_eval] codex creds loaded (account_id "
+              f"{'set' if codex_account_id else 'empty'}, token len ok); "
+              f"edit_model={args.edit_model} vision_model={args.vision_model}")
+
+    # ---- Corpus: R2 source (real user HWP) or local corpus ----
+    cases: List[Dict[str, Any]] = []
+    if args.r2_keys or args.r2_latest:
+        keys = None
+        if args.r2_keys:
+            keys = [k.strip() for k in args.r2_keys.split(",") if k.strip()]
+        print(f"[auto_eval] pulling forms from R2 "
+              f"({'keys=' + str(len(keys)) if keys else 'latest=' + str(args.r2_latest)})...")
+        cases = corpus_mod.load_from_r2(
+            keys=keys,
+            latest=args.r2_latest,
+            instruction=args.r2_instruction,
+        )
+    elif args.corpus:
+        cases = corpus_mod.load_corpus(
+            args.corpus,
+            user_data_path=args.user_data_path,
+            project_id=args.project_id,
+        )
+
     if args.limit and args.limit > 0:
         cases = cases[: args.limit]
 
     if not cases:
         print(
-            f"[auto_eval] No corpus found at: {args.corpus}\n"
-            "  Expected one of:\n"
-            "    - a directory containing template_pairs/<pairId>/ "
-            "(each with a template.hwp + diff.json or filled.cvd.md)\n"
-            "    - a manifest .json listing cases\n"
-            "    - the app SQLite .db (with --user-data-path)\n",
+            f"[auto_eval] No corpus found "
+            f"(corpus={args.corpus!r}, r2_keys={args.r2_keys!r}, r2_latest={args.r2_latest}).\n"
+            "  Provide one of: --r2-latest N, --r2-keys k1,k2, or --corpus <dir/.json/.db>.\n",
             file=sys.stderr,
         )
         return 0
@@ -432,12 +786,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     run_started = datetime.now(timezone.utc).isoformat()
 
     for case in cases:
-        record = run_case(case, args.mode, args.vision_model)
+        record = run_case(
+            case, args.mode, args.vision_model,
+            codex_token=codex_token, codex_account_id=codex_account_id,
+            edit_model=args.edit_model,
+        )
         case_results.append(record)
         _append_jsonl(jsonl_path, record)
 
-    agg = scorer_mod.aggregate_results(case_results)
-    _print_table(case_results, agg)
+    if args.mode == "full":
+        agg = _print_full_table(case_results)
+    else:
+        agg = scorer_mod.aggregate_results(case_results)
+        _print_table(case_results, agg)
 
     # Accumulate run summaries.
     summary_path = os.path.join(args.out, "summary.json")
@@ -456,9 +817,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"[auto_eval] wrote {jsonl_path}")
     print(f"[auto_eval] updated {summary_path}")
 
-    if agg["overall_accuracy"] < args.min_accuracy:
+    # MODE full has no ground-truth accuracy gate — report-only.
+    overall_acc = agg.get("overall_accuracy")
+    if overall_acc is not None and overall_acc < args.min_accuracy:
         print(
-            f"[auto_eval] overall accuracy {agg['overall_accuracy']:.3f} "
+            f"[auto_eval] overall accuracy {overall_acc:.3f} "
             f"< min {args.min_accuracy:.3f} -> FAIL",
             file=sys.stderr,
         )
