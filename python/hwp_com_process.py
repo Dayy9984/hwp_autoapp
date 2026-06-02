@@ -161,6 +161,8 @@ class DocumentProcessor:
         self._pending_track_changes: bool = False
         self._edit_history: list = []  # [{id, chatId, editCount, timestamp}, ...]
         self._current_chat_id: Optional[str] = None
+        # 베타 trace 조인키: prepare_context 에서 수신, block_cmd emit 시 첨부 (telemetry only)
+        self._verify_request_id: Optional[str] = None
 
         # ContentModifier 인스턴스 (기존 편집기)
         self._content_modifier: Optional[ContentModifier] = None
@@ -3572,7 +3574,8 @@ class DocumentProcessor:
         reference_file: Optional[str] = None,
         reference_file_name: Optional[str] = None,
         doc_index: Optional[int] = None,
-        doc_type: Optional[str] = None
+        doc_type: Optional[str] = None,
+        request_id: Optional[str] = None
     ) -> dict:
         """CVD 기반 문서 컨텍스트 생성 (Agent Process용)
 
@@ -3599,6 +3602,8 @@ class DocumentProcessor:
             }
         """
         try:
+            # 베타 trace 조인키 보관 (telemetry only — 편집 동작에 영향 없음)
+            self._verify_request_id = request_id
             self._send_progress("stage", {"stage": "init", "message": "문서 분석 시작..."})
             self._cleanup_session_state()
 
@@ -3929,6 +3934,25 @@ class DocumentProcessor:
             print(f"[Python] prepare_context 에러: {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
             return {"success": False, "error": str(e), "trace": traceback.format_exc()}
+
+    def _trace_block_cmd(self, *, command, target_id, applied, success, error_type=None):
+        """베타 trace: execute_delta 결과를 block_cmd 이벤트로 emit (telemetry only).
+
+        편집 동작/반환값/제어흐름에 절대 영향 없음 — 전체 try/except 로 감쌈.
+        """
+        try:
+            from services.beta_trace import get_session
+            s = get_session()
+            if s is not None:
+                s.block_cmd(
+                    command=str(command) if command else "unknown",
+                    target_id=str(target_id) if target_id is not None else None,
+                    applied=applied, success=success,
+                    request_id=getattr(self, "_verify_request_id", None),
+                    error_type=error_type,
+                )
+        except Exception as e:
+            print(f"[beta_trace] block_cmd hook failed: {e}", file=sys.stderr)
 
     def execute_delta(self, delta_data: dict) -> dict:
         """delta 형식 명령 실행 (executeMethod 패턴)
@@ -7021,11 +7045,33 @@ def handle_request(processor: DocumentProcessor, request: dict) -> dict:
                 params.get("referenceFile"),
                 params.get("referenceFileName"),
                 params.get("docIndex"),
-                params.get("docType")
+                params.get("docType"),
+                request_id=params.get("request_id")
             )
 
         elif method == "execute_delta":
             result["result"] = processor.execute_delta(params)
+            # 베타 trace: 결과 dict 기반으로 block_cmd applied/success emit (telemetry only).
+            # 반환값/제어흐름을 절대 변경하지 않음 — 전체 try/except.
+            try:
+                _delta_res = result["result"] if isinstance(result["result"], dict) else {}
+                _cmd = (
+                    params.get("method_type")
+                    or (params.get("metadata") or {}).get("operation")
+                    or params.get("action")
+                )
+                _tid = params.get("block_id") or params.get("id")
+                if _delta_res.get("edited") is True or _delta_res.get("replaced_count", 0) > 0:
+                    processor._trace_block_cmd(command=_cmd, target_id=_tid, applied=1, success=True)
+                elif _delta_res.get("skipped") is True:
+                    processor._trace_block_cmd(command=_cmd, target_id=_tid, applied=0, success=None)
+                else:
+                    processor._trace_block_cmd(
+                        command=_cmd, target_id=_tid, applied=0, success=False,
+                        error_type=_delta_res.get("error") or _delta_res.get("reason"),
+                    )
+            except Exception as _e:
+                print(f"[beta_trace] execute_delta dispatch hook failed: {_e}", file=sys.stderr)
 
         elif method == "finalize_edits":
             result["result"] = processor.finalize_edits(
