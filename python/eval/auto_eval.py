@@ -525,7 +525,24 @@ def _run_case_full(
             case["template_hwp_path"]
         )
 
-        prep = processor.prepare_context(prompt=instruction)
+        # FULL-document extraction: prepare_context defaults to ~current page +
+        # MAX_PAGES (5). For multi-page forms (e.g. 붙임 5–12 on later pages) the
+        # AI never sees the tail and leaves those cells blank. Compute the real
+        # page count from the open hwp and request the whole range so the CVD
+        # covers every page. Guarded: fall back to a sane cap if PageCount fails.
+        FULL_PAGE_CAP = 30
+        page_count = None
+        try:
+            page_count = int(getattr(hwp, "PageCount", None) or 0)
+        except Exception:
+            page_count = None
+        if not page_count or page_count < 1:
+            page_count = FULL_PAGE_CAP
+        record["page_count"] = page_count
+
+        prep = processor.prepare_context(
+            prompt=instruction, start_page=1, end_page=page_count
+        )
         if not isinstance(prep, dict) or not prep.get("success"):
             raise RuntimeError(f"prepare_context failed: {prep}")
         context_id = prep.get("context_id")
