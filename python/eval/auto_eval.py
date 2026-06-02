@@ -43,6 +43,29 @@ import traceback
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+
+def _force_utf8_io() -> None:
+    """Force stdout/stderr to UTF-8 so the core LLM pipeline's debug prints never
+    crash on non-Latin / emoji content.
+
+    On Windows the default console codec is cp949, which cannot encode emoji
+    (e.g. 📌 ``\\U0001f4cc``). The core ``streaming_client`` logs the LLM's
+    ``message`` (often emoji-laden) to stderr via ``print``; under cp949 that
+    raises ``UnicodeEncodeError``, which the streaming loop's generic
+    ``except Exception`` catches and converts into ``status='error'`` —
+    silently failing an otherwise-successful edit stream. Reconfiguring to
+    UTF-8 here (eval-side only, additive) removes that failure mode without
+    touching any core edit logic.
+    """
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
+_force_utf8_io()
+
 # Package root (python/) on sys.path so existing modules import cleanly.
 _PKG_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PKG_ROOT not in sys.path:
@@ -189,17 +212,100 @@ def _apply_diff_edits(
     return ops
 
 
+class _PdfSaveAdapter:
+    """Give any HWP handle a ``save_as(path, format="PDF")`` for render_doc_to_pngs.
+
+    After prepare_context, ``connector.hwp`` may be a ``HwpRawWrapper`` (no
+    ``save_as``) rather than the pyhwpx ``Hwp`` we injected — the renderer then
+    fails with ``'HwpRawWrapper' object has no attribute 'save_as'``. This
+    adapter reproduces pyhwpx's PDF export via the raw COM ``HAction`` /
+    ``HParameterSet`` (``FileSaveAs_S`` → fallback ``FileSaveAsPdf``), so render
+    works regardless of which handle survives the rebind.
+    """
+
+    def __init__(self, com: Any):
+        # ``com`` must expose HAction / HParameterSet (the raw HWP COM object).
+        self._com = com
+
+    def save_as(self, path: str, format: str = "PDF", arg: str = "") -> bool:  # noqa: A002
+        com = self._com
+        pset = com.HParameterSet.HFileOpenSave
+        com.HAction.GetDefault("FileSaveAs_S", pset.HSet)
+        pset.filename = path
+        pset.Format = "PDF"
+        pset.Attributes = 0
+        if com.HAction.Execute("FileSaveAs_S", pset.HSet):
+            return True
+        pset = com.HParameterSet.HFileOpenSave
+        com.HAction.GetDefault("FileSaveAsPdf", pset.HSet)
+        com.HParameterSet.HFileOpenSave.filename = path
+        com.HParameterSet.HFileOpenSave.Format = "PDF"
+        com.HParameterSet.HFileOpenSave.Attributes = 16384
+        return bool(com.HAction.Execute("FileSaveAsPdf", pset.HSet))
+
+
+def _save_capable_handles(processor, orig_hwp):
+    """Return ordered candidate handles for ``render_doc_to_pngs`` to save_as.
+
+    The edits are applied through ``processor._connector.hwp`` (after the
+    connector rebind that is the LIVE handle bound to the edited document and
+    guaranteed COM-connected), so try it FIRST. ``orig_hwp`` (the originally
+    injected pyhwpx Hwp) can become "object not connected to server" once the
+    rebind swaps the connector's binding, so it is only a fallback. Each handle
+    is wrapped so it exposes ``save_as`` (native, or a ``_PdfSaveAdapter`` over
+    the raw COM via HAction). ``_run_vision`` tries them in order.
+    """
+    candidates: List[Any] = []
+    seen: set = set()
+
+    def _add(obj):
+        if obj is None or id(obj) in seen:
+            return
+        seen.add(id(obj))
+        if hasattr(obj, "save_as"):
+            candidates.append(obj)
+            return
+        raw = getattr(obj, "_raw", None) or getattr(obj, "hwp", None) or obj
+        if raw is not None and hasattr(raw, "HAction") and hasattr(raw, "HParameterSet"):
+            candidates.append(_PdfSaveAdapter(raw))
+
+    # 1) live connector handle (did the edits). 2) its raw COM. 3) orig_hwp.
+    conn_handle = getattr(getattr(processor, "_connector", None), "hwp", None)
+    _add(conn_handle)
+    _add(orig_hwp)
+    return candidates
+
+
 def _run_vision(processor, instruction: Optional[str], ops: List[Dict[str, Any]],
-                model: str) -> Dict[str, Any]:
-    """MODE B: render the edited doc and run the vision verifier."""
+                model: str, orig_hwp: Any = None) -> Dict[str, Any]:
+    """MODE B: render the edited doc and run the vision verifier.
+
+    The PDF render runs on the MAIN thread: HWP COM is STA and the document was
+    created in this apartment, so a worker thread either fails CoInitialize or
+    "object not connected to server" on cross-apartment marshaling. A single
+    save_as PDF call does not exhibit the multi-op apply hang, so no watchdog is
+    needed here.
+    """
     from services.hwp_renderer import render_doc_to_pngs
     from llm.vision_verifier import verify_vision
 
-    connector = processor._connector  # noqa: SLF001
-    hwp = connector.hwp
-    pngs = render_doc_to_pngs(hwp)
+    handles = _save_capable_handles(processor, orig_hwp)
+    if not handles:
+        return {"items": [], "error": "no_render_handle", "page_count": 0}
+    pngs: List[bytes] = []
+    last_err = "render_failed"
+    for h in handles:
+        try:
+            result = render_doc_to_pngs(h)
+        except Exception as e:  # pragma: no cover - COM runtime
+            last_err = f"render_exception:{e}"
+            continue
+        if isinstance(result, list) and result:
+            pngs = result
+            break
+        last_err = "render_failed"
     if not pngs:
-        return {"items": [], "error": "render_failed", "page_count": 0}
+        return {"items": [], "error": last_err, "page_count": 0}
     verdict = verify_vision(
         images=pngs,
         user_intent=instruction or "",
@@ -266,13 +372,21 @@ def _stream_codex_edits(
     token: str,
     account_id: str,
     model: str,
+    apply_budget_s: float = 240.0,
+    max_apply_ops: int = 120,
 ) -> Dict[str, Any]:
-    """Drive the codex LLM to generate edit commands and apply each via
+    """Drive the codex LLM to generate edit commands, then apply each via
     execute_delta. Replicates agent_process._stream_llm's command wiring
     in-process (no stdio, no license gate, no telemetry — eval only).
 
+    The streaming phase only *collects* commands (no COM in the callback) so a
+    slow LLM/COM interaction can never block the stream. Application happens
+    afterward on the main (STA) thread, bounded by an overall wall-clock budget
+    and an op cap — so a pathologically slow batch stops applying and still
+    records a verdict instead of hanging the whole run.
+
     Returns a summary dict: {commands, applied, edited, ops, messages, errors,
-    stream_success, stream_error, token_usage}.
+    stream_success, stream_error, token_usage, apply_timed_out}.
     """
     from llm.streaming_client import get_streaming_client, StreamingCommand
 
@@ -280,11 +394,12 @@ def _stream_codex_edits(
     if model:
         client.model = model
 
-    ops: List[Dict[str, Any]] = []
+    collected: List["StreamingCommand"] = []
     messages: List[str] = []
     counters = {"commands": 0, "applied": 0, "edited": 0, "errors": 0}
 
     def on_command(cmd: "StreamingCommand") -> None:
+        # Collect only — NEVER touch COM here (keeps the stream thread free).
         action = cmd.action or ""
         if action in ("thinking", "message"):
             if action == "message":
@@ -294,10 +409,53 @@ def _stream_codex_edits(
             return
         if action not in _APPLY_ACTIONS:
             return
-        counters["commands"] += 1
-        # Build the delta exactly as the main process does: pass the full delta
-        # event (action/id/content/message/metadata/rows) + context_id to
-        # execute_delta, which reads metadata.operation as the method_type.
+        collected.append(cmd)
+
+    stream_success = False
+    stream_error = None
+    token_usage: Dict[str, Any] = {}
+    try:
+        res = client.generate_commands_streaming(
+            html=cvd_html,
+            prompt=instruction,
+            on_command=on_command,
+            use_delta=True,
+            use_html=False,
+            compact_mode=True,
+            enable_file_search=False,
+        )
+        stream_success = bool(getattr(res, "success", False))
+        token_usage = getattr(res, "token_usage", {}) or {}
+        if not stream_success:
+            stream_error = getattr(res, "error", None) or getattr(res, "status", None)
+    except Exception as e:
+        stream_error = str(e)
+        print(f"[auto_eval] codex stream failed: {e}", file=sys.stderr)
+
+    # --- apply phase (main/STA thread): bounded by wall-clock budget + op cap ---
+    import time as _time
+    ops: List[Dict[str, Any]] = []
+    apply_timed_out = False
+    counters["commands"] = len(collected)
+    _t_start = _time.time()
+    for idx, cmd in enumerate(collected):
+        # Stop issuing COM calls once the budget or op cap is exceeded; record
+        # the remaining commands as skipped so the verdict is still complete.
+        over_budget = (_time.time() - _t_start) > apply_budget_s
+        over_cap = idx >= max_apply_ops
+        if over_budget or over_cap:
+            apply_timed_out = apply_timed_out or over_budget
+            reason = "apply_budget_exceeded" if over_budget else "apply_op_cap_exceeded"
+            ops.append({
+                "id": cmd.id,
+                "op": (cmd.metadata or {}).get("operation") or cmd.action,
+                "action": cmd.action,
+                "content": (cmd.content or "")[:200],
+                "result": {"success": False, "error": reason},
+            })
+            counters["errors"] += 1
+            continue
+        action = cmd.action or ""
         delta: Dict[str, Any] = {
             "action": action,
             "id": cmd.id,
@@ -327,27 +485,6 @@ def _stream_codex_edits(
             "result": result,
         })
 
-    stream_success = False
-    stream_error = None
-    token_usage: Dict[str, Any] = {}
-    try:
-        res = client.generate_commands_streaming(
-            html=cvd_html,
-            prompt=instruction,
-            on_command=on_command,
-            use_delta=True,
-            use_html=False,
-            compact_mode=True,
-            enable_file_search=False,
-        )
-        stream_success = bool(getattr(res, "success", False))
-        token_usage = getattr(res, "token_usage", {}) or {}
-        if not stream_success:
-            stream_error = getattr(res, "error", None) or getattr(res, "status", None)
-    except Exception as e:
-        stream_error = str(e)
-        print(f"[auto_eval] codex stream failed: {e}", file=sys.stderr)
-
     return {
         "commands": counters["commands"],
         "applied": counters["applied"],
@@ -358,6 +495,7 @@ def _stream_codex_edits(
         "stream_success": stream_success,
         "stream_error": stream_error,
         "token_usage": token_usage,
+        "apply_timed_out": apply_timed_out,
     }
 
 
@@ -426,6 +564,7 @@ def _run_case_full(
             "applied": llm["applied"],
             "edited": llm["edited"],
             "apply_errors": llm["apply_errors"],
+            "apply_timed_out": llm.get("apply_timed_out", False),
             "messages": llm["messages"][:5],
             "token_usage": llm["token_usage"],
             "ops": [
@@ -441,27 +580,65 @@ def _run_case_full(
 
         # --- render + codex vision verify (same codex client) ---
         # Vision uses the plain user intent as the answer key (not the
-        # reference-wrapped prompt), per vision_verifier spec.
-        record["vision"] = _run_vision(processor, instruction, llm["ops"], vision_model)
+        # reference-wrapped prompt), per vision_verifier spec. Pass the original
+        # pyhwpx hwp so render has a save_as-capable handle even after the
+        # connector rebind swaps connector.hwp to a HwpRawWrapper.
+        record["vision"] = _run_vision(
+            processor, instruction, llm["ops"], vision_model, orig_hwp=hwp
+        )
     except Exception as e:
         record["error"] = str(e)
         record["trace"] = traceback.format_exc()
         print(f"[auto_eval] case '{name}' (full) failed: {e}", file=sys.stderr)
+    finally:
+        _teardown_case(hwp, connector, temp_copy)
+
+    record["finished_at"] = datetime.now(timezone.utc).isoformat()
+    return record
+
+
+def _teardown_case(hwp, connector, temp_copy) -> None:
+    """Quit the case's HWP instance and FULLY reset global session state.
+
+    Critical for batch isolation: ``_ensure_connector`` consults the global
+    runtime connector. If we only ``hwp.quit()`` and leave the (now dead)
+    connector in global state, the *next* case's ``prepare_context`` finds it,
+    runs ``validate_and_reconnect()`` and rebinds via SafeHwp to a stale
+    instance (observed: ``PID=None, HWND=None``), which makes that case's
+    execute_delta calls hang. Clearing the global connector + target ids here
+    forces the next case to use its own freshly-injected headless connector.
+    """
+    try:
+        if connector is not None:
+            try:
+                connector.disconnect()
+            except Exception:
+                pass
     finally:
         if hwp is not None:
             try:
                 hwp.quit()
             except Exception:
                 pass
+        try:
+            from engine.state.session_state import (
+                store_runtime_connector,
+                store_runtime_target_process_id,
+                store_runtime_target_window_handle,
+                reset_session_state,
+            )
+            store_runtime_connector(None)
+            store_runtime_target_process_id(None)
+            store_runtime_target_window_handle(None)
+            reset_session_state()
+        except Exception:
+            pass
         if temp_copy:
             try:
                 from engine.connection.hwp_file_opener import cleanup_temp_open_copy
                 cleanup_temp_open_copy(temp_copy)
             except Exception:
                 pass
-
-    record["finished_at"] = datetime.now(timezone.utc).isoformat()
-    return record
 
 
 # ---------------------------------------------------------------------------
