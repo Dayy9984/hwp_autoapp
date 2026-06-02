@@ -373,7 +373,7 @@ def _stream_codex_edits(
     account_id: str,
     model: str,
     apply_budget_s: float = 240.0,
-    max_apply_ops: int = 120,
+    max_apply_ops: int = 400,
 ) -> Dict[str, Any]:
     """Drive the codex LLM to generate edit commands, then apply each via
     execute_delta. Replicates agent_process._stream_llm's command wiring
@@ -506,6 +506,8 @@ def _run_case_full(
     codex_token: Optional[str],
     codex_account_id: Optional[str],
     edit_model: str,
+    max_apply_ops: int = 400,
+    apply_budget_s: float = 240.0,
 ) -> Dict[str, Any]:
     """MODE full: codex edit-gen -> apply -> render -> codex vision verify.
 
@@ -573,6 +575,7 @@ def _run_case_full(
         llm = _stream_codex_edits(
             processor, cvd_html, effective_instruction, context_id,
             codex_token, codex_account_id or "", edit_model,
+            apply_budget_s=apply_budget_s, max_apply_ops=max_apply_ops,
         )
         record["llm"] = {
             "stream_success": llm["stream_success"],
@@ -669,6 +672,8 @@ def run_case(
     codex_token: Optional[str] = None,
     codex_account_id: Optional[str] = None,
     edit_model: str = "gpt-5.1",
+    max_apply_ops: int = 400,
+    apply_budget_s: float = 240.0,
 ) -> Dict[str, Any]:
     """Run a single case through the pipeline. Never raises.
 
@@ -695,7 +700,8 @@ def run_case(
 
     if mode == "full":
         return _run_case_full(
-            case, record, vision_model, codex_token, codex_account_id, edit_model
+            case, record, vision_model, codex_token, codex_account_id, edit_model,
+            max_apply_ops=max_apply_ops, apply_budget_s=apply_budget_s,
         )
 
     # ---- MODE A / B (ground-truth replay) ----
@@ -843,6 +849,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--edit-model", default="gpt-5.5",
                    help="Codex edit-generation model for MODE full. The codex "
                         "ChatGPT backend only supports gpt-5.5 (default gpt-5.5).")
+    p.add_argument("--max-apply-ops", type=int, default=400,
+                   help="MODE full apply-op cap: max number of collected edit "
+                        "commands actually applied via execute_delta (eval harness "
+                        "guard, NOT core edit logic). Default 400 (covers large "
+                        "multi-page forms). The wall-clock --apply-budget-s still "
+                        "bounds total apply time so a COM hang can't run forever.")
+    p.add_argument("--apply-budget-s", type=float, default=240.0,
+                   help="MODE full wall-clock budget (seconds) for the apply phase. "
+                        "Once exceeded, remaining commands are recorded as skipped "
+                        "so a COM hang still can't run forever (default 240).")
     p.add_argument("--out", default="results",
                    help="Output directory for eval-<tag>.jsonl and summary.json.")
     p.add_argument("--tag", default="run",
@@ -984,6 +1000,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             case, args.mode, args.vision_model,
             codex_token=codex_token, codex_account_id=codex_account_id,
             edit_model=args.edit_model,
+            max_apply_ops=args.max_apply_ops, apply_budget_s=args.apply_budget_s,
         )
         case_results.append(record)
         _append_jsonl(jsonl_path, record)

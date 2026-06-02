@@ -355,6 +355,29 @@ def _d1_latest_keys(limit: int) -> List[str]:
     return [k for k in keys if k]
 
 
+def _normalize_r2_key(key: str) -> str:
+    """Normalize a user-supplied R2 key to the canonical ``hwp/<hash>.hwp`` form.
+
+    The harness does not auto-prefix, so a bare content hash (or a hash without
+    the ``.hwp`` extension) would 404. This guarded helper accepts:
+      - ``hwp/<hash>.hwp``           -> unchanged (already canonical)
+      - ``<hash>`` / ``<hash>.hwp``  -> prefixed with ``hwp/`` (+ ``.hwp`` if bare)
+    Any key that already contains a ``/`` (an explicit prefix) is left as-is, so
+    non-hwp keys keep working. Bonus convenience only — additive, never raises.
+    """
+    if not key:
+        return key
+    k = key.strip()
+    if "/" in k:
+        return k  # already has an explicit prefix (e.g. hwp/..., other/...)
+    # Bare segment: looks like a content hash (optionally with .hwp).
+    base = k[:-4] if k.lower().endswith(".hwp") else k
+    if base and all(c in "0123456789abcdefABCDEF" for c in base):
+        return f"hwp/{base}.hwp"
+    # Unknown bare key — leave untouched rather than guess.
+    return k
+
+
 def _r2_pull(r2_key: str, dest_dir: str) -> Optional[str]:
     """Download ``inserty-ai/<r2_key>`` into ``dest_dir``. Returns local path."""
     # Local filename: last path segment of the key (the hash.hwp).
@@ -402,6 +425,8 @@ def load_from_r2(
 
     instr = instruction or DEFAULT_R2_INSTRUCTION
     cases: List[Dict[str, Any]] = []
+    # Normalize bare-hash keys to canonical hwp/<hash>.hwp (full keys pass through).
+    keys = [_normalize_r2_key(k) for k in keys]
     for key in keys:
         local = _r2_pull(key, dest_dir)
         if not local:
