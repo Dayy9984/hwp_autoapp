@@ -27,6 +27,7 @@ import os
 import re
 import json
 import asyncio
+import threading
 import traceback
 from html.parser import HTMLParser
 from typing import Optional, Dict, List, Tuple, Any
@@ -163,6 +164,10 @@ class DocumentProcessor:
         self._current_chat_id: Optional[str] = None
         # 베타 trace 조인키: prepare_context 에서 수신, block_cmd emit 시 첨부 (telemetry only)
         self._verify_request_id: Optional[str] = None
+        # 검증 파이프라인 캐시 (telemetry only — 편집 동작에 영향 없음)
+        self._verify_user_intent: Optional[str] = None   # prepare_context 의 유저 prompt
+        self._verify_ops: list = []                      # execute_delta 누적 op 요약
+        self._verify_model: str = "gpt-5.1"              # 비전 검증 모델 (스트리밍 시점 설정)
 
         # ContentModifier 인스턴스 (기존 편집기)
         self._content_modifier: Optional[ContentModifier] = None
@@ -2305,6 +2310,11 @@ class DocumentProcessor:
 
             # 모델 설정 (Frontend에서 전달)
             model = params.get("model", "gpt-5.1")
+            # 검증 비전 모델 캐시 (telemetry only — 편집 동작에 영향 없음)
+            try:
+                self._verify_model = model or "gpt-5.1"
+            except Exception:
+                pass
 
             # 스트리밍 클라이언트
             streaming_client = get_streaming_client(openai_api_key)
@@ -3604,6 +3614,12 @@ class DocumentProcessor:
         try:
             # 베타 trace 조인키 보관 (telemetry only — 편집 동작에 영향 없음)
             self._verify_request_id = request_id
+            # 검증 정답지(유저 의도) 캐시 + 이번 사이클 op 누적 초기화 (telemetry only)
+            try:
+                self._verify_user_intent = prompt
+                self._verify_ops = []
+            except Exception:
+                pass
             self._send_progress("stage", {"stage": "init", "message": "문서 분석 시작..."})
             self._cleanup_session_state()
 
@@ -4052,6 +4068,17 @@ class DocumentProcessor:
                     method_type = "replace_footnote"
                 else:
                     method_type = "replace_paragraph"
+
+            # 검증 파이프라인: 이번 op 요약 누적 (telemetry only — 반환값/제어흐름 영향 0).
+            # 전체 try/except 로 감싸 실패해도 편집에 영향 없음.
+            try:
+                self._verify_ops.append({
+                    "op": method_type,
+                    "id": element_id,
+                    "content": (str(new_text)[:200] if new_text is not None else None),
+                })
+            except Exception:
+                pass
 
             # target contract 검증 (target_uid + id + signature/table metadata)
             # 모델이 target_uid/meta를 누락해도 id 기준 런타임 정보로 보강한다.
@@ -5885,6 +5912,28 @@ class DocumentProcessor:
                 "messages": messages,
                 "editHistory": self.get_edit_history()
             })
+
+            # 검증 파이프라인 트리거 (스펙 §5.2): diff 모드 + 실제 편집 발생 시
+            # 백그라운드 스레드로 렌더→비전→집계→전송. 본 작업/UI/반환값 절대 차단·변경 안 함.
+            # 전체 try/except — 어떤 실패도 finalize_edits 에 영향 0 (telemetry only).
+            try:
+                if self._diff_mode_enabled and edits_count > 0:
+                    from services.verification_service import run_verification
+                    connector = self._ensure_connector()
+                    verify_hwp = getattr(connector, "hwp", connector)
+                    threading.Thread(
+                        target=run_verification,
+                        kwargs={
+                            "hwp": verify_hwp,
+                            "request_id": getattr(self, "_verify_request_id", None),
+                            "user_intent": getattr(self, "_verify_user_intent", None),
+                            "op_list": list(getattr(self, "_verify_ops", []) or []),
+                            "model": getattr(self, "_verify_model", "gpt-5.1"),
+                        },
+                        daemon=True,
+                    ).start()
+            except Exception as e:
+                print(f"[verification] finalize trigger failed: {e}", file=sys.stderr)
 
             # 최종 메시지 구성
             if messages:
