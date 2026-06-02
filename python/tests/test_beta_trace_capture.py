@@ -64,3 +64,32 @@ def test_consent_record_event(monkeypatch):
     ev = captured["ev"]
     assert ev["type"] == "consent_record"
     assert ev["consented"] is True
+
+
+def test_verify_enqueues_result_and_items(monkeypatch):
+    bt = _fresh(monkeypatch, None)
+    s = bt.HwpTraceSession("tok", "dev", "hash", None)
+    sent = {}
+    monkeypatch.setattr(bt, "send_trace", lambda events, t, d: sent.setdefault("ev", events))
+    s.verify({
+        "verify_id": "v1", "request_id": "r1", "item_count": 2, "correct_count": 1,
+        "wrong_location_count": 1, "location_score": 0.5, "model": "gpt-5.1",
+        "inv_scope_respected": 1,
+        "items": [{"verdict": "correct", "requested": "이름=홍", "location_ok": 1},
+                  {"verdict": "wrong_location", "requested": "날짜=x", "location_ok": 0}],
+    })
+    types = [e["type"] for e in sent["ev"]]
+    assert types.count("verify_result") == 1 and types.count("verify_item") == 2
+    vr = [e for e in sent["ev"] if e["type"] == "verify_result"][0]
+    assert vr["verify_id"] == "v1" and vr["request_id"] == "r1"
+
+
+def test_upload_render_posts_each_page(monkeypatch):
+    bt = _fresh(monkeypatch, "https://stg.workers.dev")
+    s = bt.HwpTraceSession("tok", "dev", "hash", None)
+    calls = []
+    monkeypatch.setattr(bt, "_post_async", lambda url, body, headers, timeout: calls.append((url, len(body))))
+    s.upload_render("r1", [b"\x89PNG1", b"\x89PNG2"])
+    assert len(calls) == 2
+    assert "/hwp/render?request_id=r1&page=0" in calls[0][0]
+    assert "/hwp/render?request_id=r1&page=1" in calls[1][0]

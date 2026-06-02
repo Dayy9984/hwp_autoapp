@@ -230,6 +230,46 @@ class HwpTraceSession:
         })
         self.flush()
 
+    def verify(self, result: dict) -> None:
+        """비전 검증 결과를 verify_result 1개 + 각 항목 verify_item 으로 큐에 적재 후 flush."""
+        vr = {"type": "verify_result", "session_id": self.session_id, "doc_hash": self.doc_hash}
+        for k in ("verify_id", "request_id", "page_count", "item_count", "correct_count",
+                  "wrong_location_count", "wrong_content_count", "missing_count", "over_edit_count",
+                  "rag_retrieval_fail_count", "rag_interpret_fail_count", "uncertain_count",
+                  "location_score", "content_score", "preservation_score", "scope_score", "exec_success_rate",
+                  "approval_decision", "retry_followup", "inv_scope_respected", "inv_structure_preserved",
+                  "inv_labels_preserved", "avg_confidence", "model", "render_r2_prefix", "duration_ms"):
+            if k in result:
+                vr[k] = result[k]
+        self.queue.append(vr)
+        for it in result.get("items", []) or []:
+            item = {"type": "verify_item", "session_id": self.session_id, "verify_id": result.get("verify_id")}
+            for k in ("requested", "verdict", "found_value", "location_ok", "content_ok",
+                      "actual_desc", "confidence", "target_id", "rag_chunk_ref"):
+                if k in it:
+                    item[k] = it[k]
+            self.queue.append(item)
+        self.flush()
+
+    def upload_render(self, request_id: str, pngs: "list[bytes]") -> None:
+        """편집 후 렌더 PNG 들을 페이지별로 Worker /hwp/render 에 비동기 전송. 절대 raise 안 함."""
+        try:
+            if not self.license_token or not request_id:
+                return
+            headers = {
+                "Authorization": f"Bearer {self.license_token}",
+                "X-Device-Id": self.device_id or "",
+                "Content-Type": "image/png",
+                "User-Agent": USER_AGENT,
+            }
+            for page, body in enumerate(pngs or []):
+                if not body:
+                    continue
+                url = f"{WORKER_BASE}/hwp/render?request_id={request_id}&page={page}"
+                _post_async(url, body, headers, UPLOAD_TIMEOUT_S)
+        except Exception as e:
+            log.debug("[beta_trace] upload_render failed: %s", e)
+
     def extract(self, step: str, *, duration_ms: int | None = None, doc_size_kb: int | None = None,
                 page_count: int | None = None, has_tables: bool = False, has_images: bool = False,
                 has_diagrams: bool = False, error_type: str | None = None, error_msg: str | None = None) -> None:
