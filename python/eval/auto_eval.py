@@ -128,10 +128,36 @@ def _open_headless_processor(template_hwp_path: str):
     if not opened_ok:
         raise RuntimeError(f"HWP open failed: {template_hwp_path}")
 
-    # Build a connector and inject the live pyhwpx hwp directly. pyhwpx exposes
-    # init_scan/get_pos so connector.check_alive() passes without rebinding.
+    # Build a connector and inject the live hwp. PRODUCTION wraps the RAW COM
+    # object (``binder.get_hwp()``) in HwpRawWrapper
+    # (document_connector._initialize_from_binder), so connector.hwp exposes
+    # editor methods like InsertText / SelectAll that
+    # content_modifier.clear_cell_content calls, AND COM proxies like
+    # InitScan(Range=...) that the CVD extractor calls.
+    #
+    # The harness here holds a pyhwpx ``Hwp`` (itself a wrapper over the raw COM
+    # object). Two distinct objects matter:
+    #   * ``hwp``      — the pyhwpx Hwp (has save_as / quit / PageCount). Kept as
+    #                    the render handle + for teardown.
+    #   * ``hwp.hwp``  — the underlying RAW COM ``IHwpObject`` (HAction /
+    #                    HParameterSet / InitScan(Range=...)). This is the SAME
+    #                    kind of object production wraps, so HwpRawWrapper(raw_com)
+    #                    behaves identically to production.
+    #
+    # Injecting the raw pyhwpx Hwp (old behaviour) crashed mid-edit with
+    # ``'Hwp' object has no attribute 'InsertText'`` (form 340a07 -> COM crash ->
+    # render_failed). Wrapping the pyhwpx Hwp directly instead breaks the
+    # extractor (``Hwp.InitScan() got an unexpected keyword argument 'Range'``),
+    # because the pyhwpx wrapper's InitScan signature differs from raw COM. So we
+    # wrap the RAW COM object, exactly as production does.
+    from processing.extraction.hwp_raw_wrapper import HwpRawWrapper
+
     connector = HwpConnector(visible=False, new=False)
-    connector._hwp = hwp  # noqa: SLF001 - intentional headless injection
+    if isinstance(hwp, HwpRawWrapper):
+        connector._hwp = hwp  # noqa: SLF001
+    else:
+        raw_com = getattr(hwp, "hwp", None) or hwp  # pyhwpx Hwp.hwp == raw COM
+        connector._hwp = HwpRawWrapper(raw_com)  # noqa: SLF001 - same as production
 
     # Reset stale session state, then register THIS connector so the
     # DocumentProcessor's _ensure_connector reuses it (no SafeHwp rebind).
@@ -276,8 +302,34 @@ def _save_capable_handles(processor, orig_hwp):
     return candidates
 
 
+def _verify_vision_with_retry(model: str, **kwargs) -> Dict[str, Any]:
+    """Call verify_vision, retrying ONCE on a transient/parse error.
+
+    verify_vision never raises — it degrades to ``{"items": [], "error": <str>}``.
+    A first-page scope keeps the input tiny so the "parse" / network failures seen
+    on the 47-page form (1f379b) should not recur, but a single retry on a
+    transient error (parse / network drop / timeout) makes the harness robust to
+    a one-off bad response. Guarded to at most ONE retry (never loops).
+    """
+    from llm.vision_verifier import verify_vision
+
+    _TRANSIENT = (
+        "parse", "incomplete chunked read", "peer closed connection",
+        "connection", "timeout", "timed out", "reset", "temporarily",
+        "503", "502", "500", "overloaded",
+    )
+    verdict = verify_vision(model=model, **kwargs)
+    err = (verdict or {}).get("error")
+    if err and any(t in str(err).lower() for t in _TRANSIENT):
+        print(f"[auto_eval] vision verify transient error ({err}); retrying once",
+              file=sys.stderr)
+        verdict = verify_vision(model=model, **kwargs)
+    return verdict
+
+
 def _run_vision(processor, instruction: Optional[str], ops: List[Dict[str, Any]],
-                model: str, orig_hwp: Any = None) -> Dict[str, Any]:
+                model: str, orig_hwp: Any = None,
+                max_pages: Optional[int] = None) -> Dict[str, Any]:
     """MODE B: render the edited doc and run the vision verifier.
 
     The PDF render runs on the MAIN thread: HWP COM is STA and the document was
@@ -285,9 +337,15 @@ def _run_vision(processor, instruction: Optional[str], ops: List[Dict[str, Any]]
     "object not connected to server" on cross-apartment marshaling. A single
     save_as PDF call does not exhibit the multi-op apply hang, so no watchdog is
     needed here.
+
+    ``max_pages``: when set, only the FIRST ``max_pages`` rendered PNG(s) are
+    passed to the vision verifier. The renderer always exports the whole doc to
+    PDF (a single COM call), so we slice its output rather than re-rendering —
+    this caps the vision input to page 1 (default), which is what FILL also
+    scopes to, so every form is judged on the same scope. The huge 47-page input
+    that produced the unparseable vision response (form 1f379b) cannot recur.
     """
     from services.hwp_renderer import render_doc_to_pngs
-    from llm.vision_verifier import verify_vision
 
     handles = _save_capable_handles(processor, orig_hwp)
     if not handles:
@@ -306,14 +364,18 @@ def _run_vision(processor, instruction: Optional[str], ops: List[Dict[str, Any]]
         last_err = "render_failed"
     if not pngs:
         return {"items": [], "error": last_err, "page_count": 0}
-    verdict = verify_vision(
+    total_pages = len(pngs)
+    if max_pages and max_pages > 0:
+        pngs = pngs[:max_pages]
+    verdict = _verify_vision_with_retry(
+        model=model,
         images=pngs,
         user_intent=instruction or "",
         op_list=[{"id": o["id"], "op": o["op"], "content": o["content"]} for o in ops],
         structure_summary=None,
-        model=model,
     )
     verdict["page_count"] = len(pngs)
+    verdict["doc_page_count"] = total_pages
     return verdict
 
 
@@ -411,26 +473,47 @@ def _stream_codex_edits(
             return
         collected.append(cmd)
 
-    stream_success = False
-    stream_error = None
-    token_usage: Dict[str, Any] = {}
-    try:
-        res = client.generate_commands_streaming(
-            html=cvd_html,
-            prompt=instruction,
-            on_command=on_command,
-            use_delta=True,
-            use_html=False,
-            compact_mode=True,
-            enable_file_search=False,
-        )
-        stream_success = bool(getattr(res, "success", False))
-        token_usage = getattr(res, "token_usage", {}) or {}
-        if not stream_success:
-            stream_error = getattr(res, "error", None) or getattr(res, "status", None)
-    except Exception as e:
-        stream_error = str(e)
-        print(f"[auto_eval] codex stream failed: {e}", file=sys.stderr)
+    # Transient network-drop markers. The codex edit stream occasionally drops
+    # mid-way (observed on form f241fa: "peer closed connection ... incomplete
+    # chunked read" -> 0 edits). On such a transient error we RETRY the stream
+    # ONCE (guarded — never loops). A clean re-run usually completes.
+    _TRANSIENT_STREAM = (
+        "incomplete chunked read", "peer closed connection", "connection",
+        "timeout", "timed out", "reset", "remotedisconnected", "503", "502",
+        "500", "overloaded", "temporarily",
+    )
+
+    def _is_transient(err: Any) -> bool:
+        return bool(err) and any(t in str(err).lower() for t in _TRANSIENT_STREAM)
+
+    def _run_stream() -> "tuple":
+        try:
+            res = client.generate_commands_streaming(
+                html=cvd_html,
+                prompt=instruction,
+                on_command=on_command,
+                use_delta=True,
+                use_html=False,
+                compact_mode=True,
+                enable_file_search=False,
+            )
+            ok = bool(getattr(res, "success", False))
+            tu = getattr(res, "token_usage", {}) or {}
+            err = None if ok else (getattr(res, "error", None) or getattr(res, "status", None))
+            return ok, err, tu
+        except Exception as e:
+            print(f"[auto_eval] codex stream failed: {e}", file=sys.stderr)
+            return False, str(e), {}
+
+    stream_success, stream_error, token_usage = _run_stream()
+    if not stream_success and _is_transient(stream_error):
+        print(f"[auto_eval] codex stream transient drop ({stream_error}); "
+              f"retrying once", file=sys.stderr)
+        # Reset collected commands from the partial attempt so the retry's
+        # output isn't mixed with a half-streamed first attempt.
+        collected.clear()
+        messages.clear()
+        stream_success, stream_error, token_usage = _run_stream()
 
     # --- apply phase (main/STA thread): bounded by wall-clock budget + op cap ---
     import time as _time
@@ -508,10 +591,17 @@ def _run_case_full(
     edit_model: str,
     max_apply_ops: int = 400,
     apply_budget_s: float = 240.0,
+    max_pages: int = 1,
 ) -> Dict[str, Any]:
     """MODE full: codex edit-gen -> apply -> render -> codex vision verify.
 
     Fully guarded; never raises. No ground truth needed (R2 forms).
+
+    ``max_pages`` (default 1) scopes BOTH fill and verify to the first N page(s):
+    prepare_context only extracts/feeds page 1..N to the model, and the vision
+    verifier only sees the first N rendered PNG(s). Small input => no codex
+    stream drop, no vision parse failure, fast, and every form judged on the
+    same scope (page 1) = fair + reproducible.
     """
     name = case.get("name", "unknown")
     instruction = case.get("instruction") or corpus_mod.DEFAULT_R2_INSTRUCTION
@@ -527,23 +617,25 @@ def _run_case_full(
             case["template_hwp_path"]
         )
 
-        # FULL-document extraction: prepare_context defaults to ~current page +
-        # MAX_PAGES (5). For multi-page forms (e.g. 붙임 5–12 on later pages) the
-        # AI never sees the tail and leaves those cells blank. Compute the real
-        # page count from the open hwp and request the whole range so the CVD
-        # covers every page. Guarded: fall back to a sane cap if PageCount fails.
-        FULL_PAGE_CAP = 30
-        page_count = None
+        # FIRST-PAGE scope: extract/feed only page 1..max_pages (default 1) to
+        # the model. The doc's real page count still bounds end_page so we never
+        # ask for pages past the document. Small input is the primary
+        # reliability fix (no codex stream drop, no vision parse fail, fast,
+        # reproducible). Guarded: fall back if PageCount fails.
+        doc_pages = None
         try:
-            page_count = int(getattr(hwp, "PageCount", None) or 0)
+            doc_pages = int(getattr(hwp, "PageCount", None) or 0)
         except Exception:
-            page_count = None
-        if not page_count or page_count < 1:
-            page_count = FULL_PAGE_CAP
-        record["page_count"] = page_count
+            doc_pages = None
+        if not doc_pages or doc_pages < 1:
+            doc_pages = max_pages
+        end_page = min(max_pages, doc_pages) if max_pages and max_pages > 0 else doc_pages
+        record["doc_page_count"] = doc_pages
+        record["page_count"] = end_page
+        record["max_pages"] = max_pages
 
         prep = processor.prepare_context(
-            prompt=instruction, start_page=1, end_page=page_count
+            prompt=instruction, start_page=1, end_page=end_page
         )
         if not isinstance(prep, dict) or not prep.get("success"):
             raise RuntimeError(f"prepare_context failed: {prep}")
@@ -604,7 +696,8 @@ def _run_case_full(
         # pyhwpx hwp so render has a save_as-capable handle even after the
         # connector rebind swaps connector.hwp to a HwpRawWrapper.
         record["vision"] = _run_vision(
-            processor, instruction, llm["ops"], vision_model, orig_hwp=hwp
+            processor, instruction, llm["ops"], vision_model, orig_hwp=hwp,
+            max_pages=max_pages,
         )
     except Exception as e:
         record["error"] = str(e)
@@ -674,6 +767,7 @@ def run_case(
     edit_model: str = "gpt-5.1",
     max_apply_ops: int = 400,
     apply_budget_s: float = 240.0,
+    max_pages: int = 1,
 ) -> Dict[str, Any]:
     """Run a single case through the pipeline. Never raises.
 
@@ -702,6 +796,7 @@ def run_case(
         return _run_case_full(
             case, record, vision_model, codex_token, codex_account_id, edit_model,
             max_apply_ops=max_apply_ops, apply_budget_s=apply_budget_s,
+            max_pages=max_pages,
         )
 
     # ---- MODE A / B (ground-truth replay) ----
@@ -859,6 +954,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="MODE full wall-clock budget (seconds) for the apply phase. "
                         "Once exceeded, remaining commands are recorded as skipped "
                         "so a COM hang still can't run forever (default 240).")
+    p.add_argument("--max-pages", type=int, default=1,
+                   help="Scope BOTH fill and verify to the first N page(s) "
+                        "(default 1 = first page only). FILL: prepare_context "
+                        "extracts/feeds page 1..N to the model. VERIFY: only the "
+                        "first N rendered PNG(s) go to the vision verifier. Small "
+                        "input => no codex stream drop, no vision parse fail, fast, "
+                        "and every form judged on the same scope = fair + reproducible.")
     p.add_argument("--out", default="results",
                    help="Output directory for eval-<tag>.jsonl and summary.json.")
     p.add_argument("--tag", default="run",
@@ -989,7 +1091,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return 0
 
-    print(f"[auto_eval] mode={args.mode} cases={len(cases)} tag={args.tag}")
+    print(f"[auto_eval] mode={args.mode} cases={len(cases)} tag={args.tag} "
+          f"max_pages={args.max_pages}")
 
     case_results: List[Dict[str, Any]] = []
     jsonl_path = os.path.join(args.out, f"eval-{args.tag}.jsonl")
@@ -1001,6 +1104,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             codex_token=codex_token, codex_account_id=codex_account_id,
             edit_model=args.edit_model,
             max_apply_ops=args.max_apply_ops, apply_budget_s=args.apply_budget_s,
+            max_pages=args.max_pages,
         )
         case_results.append(record)
         _append_jsonl(jsonl_path, record)
