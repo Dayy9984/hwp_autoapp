@@ -3445,7 +3445,8 @@ ipcMain.handle('chat:send', async (
 
 ) => {
 
-
+  // verify-loop: 요청 단위 조인키 — prepare_context/stream_llm/execute_delta/finalize_edits 관통
+  const requestId = (globalThis.crypto?.randomUUID?.() ?? `req-${Date.now()}-${Math.floor(Math.random()*1e6)}`)
 
   const cancelToken = { id: ++chatCancelTokenSeq, cancelled: false, contextId: null as string | null }
 
@@ -4626,6 +4627,8 @@ ${filesList.join('\n')}
 
       docType,
 
+      request_id: requestId,
+
 
 
     })
@@ -5021,7 +5024,8 @@ ${filesList.join('\n')}
 
             const editResult = await pythonBridge!.call('execute_delta', {
               ...deltaEvent,
-              context_id: context_id
+              context_id: context_id,
+              request_id: requestId
             })
 
 
@@ -5445,6 +5449,7 @@ ${filesList.join('\n')}
         promptFullOverride,
         codexMode,
         codexAccountId,
+        request_id: requestId,
       }
 
       const appendLatestMessage = (result: any, replaceExisting = false) => {
@@ -5615,7 +5620,7 @@ ${filesList.join('\n')}
 
         messages,
 
-
+        request_id: requestId,
 
       })
 
@@ -7341,6 +7346,12 @@ function generateRejectReason(result: any, type: 'all' | 'partial'): string {
 
 
 
+
+
+// 베타 진단 데이터 동의 (verify-loop) — COM 프로세스로 전달하여 consent_record emit
+ipcMain.handle('consent:set', async (_, { consented }: { consented: boolean }) => {
+  return pythonBridge ? pythonBridge.call('consent:set', { consented }) : { ok: false }
+})
 
 
 // CVD 추출 (Template Pair)

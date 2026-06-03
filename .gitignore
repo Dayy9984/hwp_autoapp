@@ -98,3 +98,4 @@ temp_drive_folder.html
 python/pyarmor.bug.log
 python/build_output.log
 python/nuitka-crash-report.xml
+eval-results/

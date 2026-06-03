@@ -37,6 +37,9 @@ interface SettingsState {
   promptCustomRules: string
   promptFullOverride: string
 
+  // Diagnostic data consent (beta quality improvement)
+  diagnosticConsent: boolean
+
   // Actions - Text Size
   setTextSize: (size: number) => void
 
@@ -60,6 +63,9 @@ interface SettingsState {
   setPromptCustomEnabled: (enabled: boolean) => void
   setPromptCustomRules: (rules: string) => void
   setPromptFullOverride: (prompt: string) => void
+
+  // Actions - Diagnostic consent
+  setDiagnosticConsent: (consented: boolean) => void
 
   // Actions - Account
   setEmail: (email: string | null) => void
@@ -110,6 +116,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   promptCustomEnabled: false,
   promptCustomRules: '',
   promptFullOverride: '',
+  diagnosticConsent: false,
   hasHydrated: false,
 
   // Text size actions
@@ -233,6 +240,14 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     saveSetting('prompt_full_override', prompt, 'string')
   },
 
+  // Diagnostic consent actions
+  setDiagnosticConsent: (consented) => {
+    set({ diagnosticConsent: consented })
+    saveSetting('diagnostic_consent', consented, 'boolean')
+    const api = typeof window !== 'undefined' ? window.electronAPI : undefined
+    api?.consent?.set?.(consented)
+  },
+
   // Account actions
   setEmail: (email) => {
     set({ email })
@@ -298,6 +313,9 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
       promptFullOverride: typeof settings.prompt_full_override === 'string'
         ? settings.prompt_full_override
         : '',
+      diagnosticConsent: typeof settings.diagnostic_consent === 'boolean'
+        ? settings.diagnostic_consent
+        : Boolean(settings.diagnostic_consent),
       hasHydrated: true,
     })
     const appliedSize = typeof settings.text_size === 'number' ? settings.text_size : 16

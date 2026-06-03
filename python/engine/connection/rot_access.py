@@ -103,9 +103,11 @@ class ROTAccessManager:
                     return instance
             return None
 
+        valid_instances = []
         for instance in instances:
             if not ROTAccessManager.verify_hwp_instance(instance):
                 continue
+            valid_instances.append(instance)
 
             try:
                 windows = instance.XHwpWindows
@@ -128,12 +130,17 @@ class ROTAccessManager:
                     if pid == preferred_pid:
                         return instance
 
+        # HWP 2018 can expose a valid ROT object while XHwpWindows.WindowHandle
+        # access fails. If only one valid HWP object is registered, keep it
+        # instead of treating the target as missing.
+        if has_target and len(valid_instances) == 1:
+            return valid_instances[0]
+
         if strict:
             return None
 
-        for instance in instances:
-            if ROTAccessManager.verify_hwp_instance(instance):
-                return instance
+        if valid_instances:
+            return valid_instances[0]
         return None
 
     @staticmethod

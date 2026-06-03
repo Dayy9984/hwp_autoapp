@@ -27,6 +27,7 @@ import os
 import re
 import json
 import asyncio
+import threading
 import traceback
 from html.parser import HTMLParser
 from typing import Optional, Dict, List, Tuple, Any
@@ -169,6 +170,12 @@ class DocumentProcessor:
         self._pending_track_changes: bool = False
         self._edit_history: list = []  # [{id, chatId, editCount, timestamp}, ...]
         self._current_chat_id: Optional[str] = None
+        # 베타 trace 조인키: prepare_context 에서 수신, block_cmd emit 시 첨부 (telemetry only)
+        self._verify_request_id: Optional[str] = None
+        # 검증 파이프라인 캐시 (telemetry only — 편집 동작에 영향 없음)
+        self._verify_user_intent: Optional[str] = None   # prepare_context 의 유저 prompt
+        self._verify_ops: list = []                      # execute_delta 누적 op 요약
+        self._verify_model: str = "gpt-5.1"              # 비전 검증 모델 (스트리밍 시점 설정)
 
         # ContentModifier 인스턴스 (기존 편집기)
         self._content_modifier: Optional[ContentModifier] = None
@@ -378,10 +385,10 @@ class DocumentProcessor:
                         if not is_valid:
                             print(f"[Python] _get_hwp_from_rot: 좀비 HWP 프로세스 감지 (유효하지 않은 창 핸들), 무시", file=sys.stderr)
                             return None
-                except Exception:
-                    # WindowHandle 접근 실패 시에도 좀비로 간주
-                    print(f"[Python] _get_hwp_from_rot: 좀비 HWP 프로세스 감지 (창 핸들 접근 실패), 무시", file=sys.stderr)
-                    return None
+                except Exception as e:
+                    # HWP 2018 can fail on XHwpWindows.Item(0).WindowHandle
+                    # while the ROT object and document collection are valid.
+                    print(f"[Python] _get_hwp_from_rot: WindowHandle 접근 실패: {e}, 계속 진행", file=sys.stderr)
             except Exception as e:
                 print(f"[Python] _get_hwp_from_rot: XHwpWindows 확인 실패: {e}, 계속 진행", file=sys.stderr)
 
@@ -1018,10 +1025,9 @@ class DocumentProcessor:
                         if not is_valid:
                             print(f"[Python] 좀비 HWP 프로세스 감지 (유효하지 않은 창 핸들), 무시", file=sys.stderr)
                             return documents
-                except Exception:
-                    # WindowHandle 접근 실패 시에도 좀비로 간주
-                    print(f"[Python] 좀비 HWP 프로세스 감지 (창 핸들 접근 실패), 무시", file=sys.stderr)
-                    return documents
+                except Exception as e:
+                    # HWP 2018 can fail on WindowHandle even for live documents.
+                    print(f"[Python] WindowHandle 접근 실패: {e}, 계속 진행", file=sys.stderr)
             except Exception as e:
                 print(f"[Python] XHwpWindows 확인 실패: {e}, 계속 진행", file=sys.stderr)
 
@@ -2311,6 +2317,11 @@ class DocumentProcessor:
 
             # 모델 설정 (Frontend에서 전달)
             model = params.get("model", "gpt-5.1")
+            # 검증 비전 모델 캐시 (telemetry only — 편집 동작에 영향 없음)
+            try:
+                self._verify_model = model or "gpt-5.1"
+            except Exception:
+                pass
 
             # 스트리밍 클라이언트
             streaming_client = get_streaming_client(openai_api_key)
@@ -3580,7 +3591,8 @@ class DocumentProcessor:
         reference_file: Optional[str] = None,
         reference_file_name: Optional[str] = None,
         doc_index: Optional[int] = None,
-        doc_type: Optional[str] = None
+        doc_type: Optional[str] = None,
+        request_id: Optional[str] = None
     ) -> dict:
         """CVD 기반 문서 컨텍스트 생성 (Agent Process용)
 
@@ -3607,6 +3619,14 @@ class DocumentProcessor:
             }
         """
         try:
+            # 베타 trace 조인키 보관 (telemetry only — 편집 동작에 영향 없음)
+            self._verify_request_id = request_id
+            # 검증 정답지(유저 의도) 캐시 + 이번 사이클 op 누적 초기화 (telemetry only)
+            try:
+                self._verify_user_intent = prompt
+                self._verify_ops = []
+            except Exception:
+                pass
             self._send_progress("stage", {"stage": "init", "message": "문서 분석 시작..."})
             self._cleanup_session_state()
 
@@ -3938,6 +3958,25 @@ class DocumentProcessor:
             traceback.print_exc(file=sys.stderr)
             return {"success": False, "error": str(e), "trace": traceback.format_exc()}
 
+    def _trace_block_cmd(self, *, command, target_id, applied, success, error_type=None):
+        """베타 trace: execute_delta 결과를 block_cmd 이벤트로 emit (telemetry only).
+
+        편집 동작/반환값/제어흐름에 절대 영향 없음 — 전체 try/except 로 감쌈.
+        """
+        try:
+            from services.beta_trace import get_session
+            s = get_session()
+            if s is not None:
+                s.block_cmd(
+                    command=str(command) if command else "unknown",
+                    target_id=str(target_id) if target_id is not None else None,
+                    applied=applied, success=success,
+                    request_id=getattr(self, "_verify_request_id", None),
+                    error_type=error_type,
+                )
+        except Exception as e:
+            print(f"[beta_trace] block_cmd hook failed: {e}", file=sys.stderr)
+
     def execute_delta(self, delta_data: dict) -> dict:
         """delta 형식 명령 실행 (executeMethod 패턴)
 
@@ -4036,6 +4075,17 @@ class DocumentProcessor:
                     method_type = "replace_footnote"
                 else:
                     method_type = "replace_paragraph"
+
+            # 검증 파이프라인: 이번 op 요약 누적 (telemetry only — 반환값/제어흐름 영향 0).
+            # 전체 try/except 로 감싸 실패해도 편집에 영향 없음.
+            try:
+                self._verify_ops.append({
+                    "op": method_type,
+                    "id": element_id,
+                    "content": (str(new_text)[:200] if new_text is not None else None),
+                })
+            except Exception:
+                pass
 
             # target contract 검증 (target_uid + id + signature/table metadata)
             # 모델이 target_uid/meta를 누락해도 id 기준 런타임 정보로 보강한다.
@@ -5870,6 +5920,52 @@ class DocumentProcessor:
                 "editHistory": self.get_edit_history()
             })
 
+            # 검증 파이프라인 트리거 (스펙 §5.2): diff 모드 + 실제 편집 발생 시
+            # 백그라운드 스레드로 렌더→비전→집계→전송. 본 작업/UI/반환값 절대 차단·변경 안 함.
+            # 전체 try/except — 어떤 실패도 finalize_edits 에 영향 0 (telemetry only).
+            #
+            # ⚠️ 실유저 기본 OFF: in-app verify 는 (1) 전체 문서 렌더(수초~수분, 무거운
+            #   문서는 hang), (2) 비전 API + 이미지 업로드, (3) STA COM 객체를 백그라운드
+            #   스레드에서 접근(크래시/렉 위험) — 실유저 UX 를 해칠 수 있다. 동일 verify
+            #   데이터는 내부 eval 하네스(eval.auto_eval)가 R2 corpus(실유저 문서)로 수집
+            #   하므로, 실유저 기기에서 돌릴 필요가 없다. 내부(팀/베타) 머신에서만
+            #   환경변수 INSERTY_VERIFY_INAPP=1 로 켠다. 가벼운 trace(block_cmd 등)는
+            #   이 게이트와 무관하게 그대로 동작(아래 finally 의 flush).
+            import os as _os
+            _verify_inapp = _os.environ.get("INSERTY_VERIFY_INAPP", "").strip().lower() in (
+                "1", "true", "yes", "on",
+            )
+            try:
+                if _verify_inapp and self._diff_mode_enabled and edits_count > 0:
+                    from services.verification_service import run_verification
+                    connector = self._ensure_connector()
+                    verify_hwp = getattr(connector, "hwp", connector)
+                    # 현재 trace 세션을 finally 의 end_session() 이전에 캡처해 스레드로 전달.
+                    # 캡처 세션은 _CURRENT_SESSION 이 nulled 된 뒤에도 자체 토큰으로 전송 가능 →
+                    # get_session() race 로 인한 verify telemetry 유실 방지.
+                    _vs = None
+                    try:
+                        from services.beta_trace import get_session
+                        _vs = get_session()
+                    except Exception:
+                        pass
+                    threading.Thread(
+                        target=run_verification,
+                        kwargs={
+                            "hwp": verify_hwp,
+                            "request_id": getattr(self, "_verify_request_id", None),
+                            "user_intent": getattr(self, "_verify_user_intent", None),
+                            "op_list": list(getattr(self, "_verify_ops", []) or []),
+                            "model": getattr(self, "_verify_model", "gpt-5.1"),
+                            "session": _vs,
+                            # 렌더 스코프(첫 N 페이지). 미설정이면 None(전체 문서, 기존 동작).
+                            "max_pages": getattr(self, "_verify_max_pages", None),
+                        },
+                        daemon=True,
+                    ).start()
+            except Exception as e:
+                print(f"[verification] finalize trigger failed: {e}", file=sys.stderr)
+
             # 최종 메시지 구성
             if messages:
                 final_message = "\n".join(messages)
@@ -6732,6 +6828,16 @@ def handle_request(processor: DocumentProcessor, request: dict) -> dict:
             except Exception as e:
                 result["result"] = {"ok": False, "error": str(e)}
 
+        elif method == "consent:set":
+            # 설정 UI 동의 토글 → consent_record 이벤트 emit
+            try:
+                from services.beta_trace import get_session, start_session, _LICENSE_TOKEN, _DEVICE_ID, HwpTraceSession
+                s = get_session() or HwpTraceSession(_LICENSE_TOKEN, _DEVICE_ID, "", None)
+                s.consent_record(bool(params.get("consented")), "v1")
+                result["result"] = {"ok": True}
+            except Exception as e:
+                result["result"] = {"ok": False, "error": str(e)}
+
         elif method == "open":
             result["result"] = processor.open_document(params.get("file"))
 
@@ -7029,11 +7135,33 @@ def handle_request(processor: DocumentProcessor, request: dict) -> dict:
                 params.get("referenceFile"),
                 params.get("referenceFileName"),
                 params.get("docIndex"),
-                params.get("docType")
+                params.get("docType"),
+                request_id=params.get("request_id")
             )
 
         elif method == "execute_delta":
             result["result"] = processor.execute_delta(params)
+            # 베타 trace: 결과 dict 기반으로 block_cmd applied/success emit (telemetry only).
+            # 반환값/제어흐름을 절대 변경하지 않음 — 전체 try/except.
+            try:
+                _delta_res = result["result"] if isinstance(result["result"], dict) else {}
+                _cmd = (
+                    params.get("method_type")
+                    or (params.get("metadata") or {}).get("operation")
+                    or params.get("action")
+                )
+                _tid = params.get("block_id") or params.get("id")
+                if _delta_res.get("edited") is True or _delta_res.get("replaced_count", 0) > 0:
+                    processor._trace_block_cmd(command=_cmd, target_id=_tid, applied=1, success=True)
+                elif _delta_res.get("skipped") is True:
+                    processor._trace_block_cmd(command=_cmd, target_id=_tid, applied=0, success=None)
+                else:
+                    processor._trace_block_cmd(
+                        command=_cmd, target_id=_tid, applied=0, success=False,
+                        error_type=_delta_res.get("error") or _delta_res.get("reason"),
+                    )
+            except Exception as _e:
+                print(f"[beta_trace] execute_delta dispatch hook failed: {_e}", file=sys.stderr)
 
         elif method == "finalize_edits":
             result["result"] = processor.finalize_edits(

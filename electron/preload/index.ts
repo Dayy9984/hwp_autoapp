@@ -229,6 +229,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('trackChanges:rejectSelected', params),
   },
 
+  // 베타 진단 데이터 동의 (verify-loop)
+  consent: {
+    set: (consented: boolean) => ipcRenderer.invoke('consent:set', { consented }),
+  },
+
   // Phase 4: CVD 추출 및 Diff 생성
   cvd: {
     extractPair: (args: {
@@ -648,6 +653,10 @@ declare global {
             reason: string
           }
         }>
+      }
+      // 베타 진단 데이터 동의 (verify-loop)
+      consent: {
+        set: (consented: boolean) => Promise<{ ok: boolean; error?: string }>
       }
       // Phase 4: CVD 추출 및 Diff 생성
       cvd: {
