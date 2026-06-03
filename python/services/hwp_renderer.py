@@ -13,6 +13,7 @@ import io
 import os
 import sys
 import tempfile
+import time
 
 
 def _load_pdf_images_for_render(pdf_path, dpi):
@@ -25,34 +26,48 @@ def _load_pdf_images_for_render(pdf_path, dpi):
     return OCRService()._load_pdf_images(pdf_path, dpi=dpi)[0]
 
 
-def render_doc_to_pngs(hwp, dpi: int = 200) -> "list[bytes]":
+def render_doc_to_pngs(hwp, dpi: int = 200, attempts: int = 3) -> "list[bytes]":
     """편집된 HWP 문서를 PDF→PNG[] 로 렌더한다.
+
+    save_as(PDF) 가 HWP COM RPC 변덕(예: -2147023174 'RPC 서버 사용 불가',
+    -2147023170 '원격 프로시저 호출 못함')으로 실패하는 경우가 있어 backoff 재시도한다.
+    transient 한 RPC 글리치는 재시도로 복구되고, COM 이 완전히 죽은 경우엔 모두 실패 →
+    빈 리스트 반환(상위 form-level 재시도가 새 프로세스로 복구).
 
     Args:
         hwp: pyhwpx HWP COM 객체(또는 save_as 를 가진 호환 객체).
         dpi: PDF→이미지 변환 DPI (기본 200, 스펙 §5.3).
+        attempts: 렌더 재시도 횟수(기본 3).
 
     Returns:
         페이지별 PNG bytes 리스트. 실패 시 [] (절대 raise 안 함).
     """
-    tmp = None
-    try:
-        fd, tmp = tempfile.mkstemp(suffix=".pdf")
-        os.close(fd)
-        hwp.save_as(tmp, format="PDF")
-        images = _load_pdf_images_for_render(tmp, dpi)
-        out: list[bytes] = []
-        for img in images or []:
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            out.append(buf.getvalue())
-        return out
-    except Exception as e:
-        print(f"[hwp_renderer] failed: {e}", file=sys.stderr)
-        return []
-    finally:
-        if tmp and os.path.exists(tmp):
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
+    last_err = None
+    for attempt in range(1, attempts + 1):
+        tmp = None
+        try:
+            fd, tmp = tempfile.mkstemp(suffix=".pdf")
+            os.close(fd)
+            hwp.save_as(tmp, format="PDF")
+            images = _load_pdf_images_for_render(tmp, dpi)
+            out: list[bytes] = []
+            for img in images or []:
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                out.append(buf.getvalue())
+            if out:
+                return out
+            last_err = "no images rendered"
+        except Exception as e:
+            last_err = e
+            print(f"[hwp_renderer] attempt {attempt}/{attempts} failed: {e}", file=sys.stderr)
+        finally:
+            if tmp and os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+        if attempt < attempts:
+            time.sleep(1.5 * attempt)  # backoff
+    print(f"[hwp_renderer] all {attempts} attempts failed: {last_err}", file=sys.stderr)
+    return []
