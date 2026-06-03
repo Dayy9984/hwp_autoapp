@@ -34,7 +34,7 @@ class _FakeSession:
 
 def _patch(monkeypatch, pngs, verdict, session):
     import services.verification_service as vs
-    monkeypatch.setattr(vs, "render_doc_to_pngs", lambda hwp, dpi=200: list(pngs))
+    monkeypatch.setattr(vs, "render_doc_to_pngs", lambda hwp, dpi=200, max_pages=None: list(pngs))
     monkeypatch.setattr(vs, "verify_vision",
                         lambda images, user_intent, op_list, structure_summary, model, client=None: verdict)
     monkeypatch.setattr(vs, "get_session", lambda: session)
@@ -84,7 +84,7 @@ def test_run_verification_uses_passed_session_not_get_session(monkeypatch):
     (it may be None after end_session()). Make get_session blow up to prove it."""
     session = _FakeSession()
     import services.verification_service as vs
-    monkeypatch.setattr(vs, "render_doc_to_pngs", lambda hwp, dpi=200: [b"png1"])
+    monkeypatch.setattr(vs, "render_doc_to_pngs", lambda hwp, dpi=200, max_pages=None: [b"png1"])
     monkeypatch.setattr(vs, "verify_vision",
                         lambda images, user_intent, op_list, structure_summary, model, client=None: _VERDICT)
 
@@ -118,7 +118,7 @@ def test_run_verification_aborts_when_no_pngs(monkeypatch):
 
 def test_run_verification_never_raises_without_session(monkeypatch):
     import services.verification_service as vs
-    monkeypatch.setattr(vs, "render_doc_to_pngs", lambda hwp, dpi=200: [b"png"])
+    monkeypatch.setattr(vs, "render_doc_to_pngs", lambda hwp, dpi=200, max_pages=None: [b"png"])
     monkeypatch.setattr(vs, "verify_vision",
                         lambda images, user_intent, op_list, structure_summary, model, client=None: _VERDICT)
     monkeypatch.setattr(vs, "get_session", lambda: None)
@@ -130,7 +130,7 @@ def test_run_verification_never_raises_on_render_error(monkeypatch):
     session = _FakeSession()
     import services.verification_service as vs
 
-    def _boom(hwp, dpi=200):
+    def _boom(hwp, dpi=200, max_pages=None):
         raise RuntimeError("render exploded")
 
     monkeypatch.setattr(vs, "render_doc_to_pngs", _boom)

@@ -377,10 +377,10 @@ class DocumentProcessor:
                         if not is_valid:
                             print(f"[Python] _get_hwp_from_rot: 좀비 HWP 프로세스 감지 (유효하지 않은 창 핸들), 무시", file=sys.stderr)
                             return None
-                except Exception:
-                    # WindowHandle 접근 실패 시에도 좀비로 간주
-                    print(f"[Python] _get_hwp_from_rot: 좀비 HWP 프로세스 감지 (창 핸들 접근 실패), 무시", file=sys.stderr)
-                    return None
+                except Exception as e:
+                    # HWP 2018 can fail on XHwpWindows.Item(0).WindowHandle
+                    # while the ROT object and document collection are valid.
+                    print(f"[Python] _get_hwp_from_rot: WindowHandle 접근 실패: {e}, 계속 진행", file=sys.stderr)
             except Exception as e:
                 print(f"[Python] _get_hwp_from_rot: XHwpWindows 확인 실패: {e}, 계속 진행", file=sys.stderr)
 
@@ -1017,10 +1017,9 @@ class DocumentProcessor:
                         if not is_valid:
                             print(f"[Python] 좀비 HWP 프로세스 감지 (유효하지 않은 창 핸들), 무시", file=sys.stderr)
                             return documents
-                except Exception:
-                    # WindowHandle 접근 실패 시에도 좀비로 간주
-                    print(f"[Python] 좀비 HWP 프로세스 감지 (창 핸들 접근 실패), 무시", file=sys.stderr)
-                    return documents
+                except Exception as e:
+                    # HWP 2018 can fail on WindowHandle even for live documents.
+                    print(f"[Python] WindowHandle 접근 실패: {e}, 계속 진행", file=sys.stderr)
             except Exception as e:
                 print(f"[Python] XHwpWindows 확인 실패: {e}, 계속 진행", file=sys.stderr)
 
@@ -5939,6 +5938,8 @@ class DocumentProcessor:
                             "op_list": list(getattr(self, "_verify_ops", []) or []),
                             "model": getattr(self, "_verify_model", "gpt-5.1"),
                             "session": _vs,
+                            # 렌더 스코프(첫 N 페이지). 미설정이면 None(전체 문서, 기존 동작).
+                            "max_pages": getattr(self, "_verify_max_pages", None),
                         },
                         daemon=True,
                     ).start()

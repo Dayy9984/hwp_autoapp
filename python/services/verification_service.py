@@ -49,7 +49,8 @@ def _to_score(value) -> "float | None":
         return None
 
 
-def run_verification(hwp, *, request_id, user_intent, op_list, model, session=None) -> None:
+def run_verification(hwp, *, request_id, user_intent, op_list, model, session=None,
+                     max_pages=None) -> None:
     """편집 후 문서 검증 — 백그라운드 스레드 진입점. 절대 raise 안 함.
 
     Args:
@@ -62,10 +63,12 @@ def run_verification(hwp, *, request_id, user_intent, op_list, model, session=No
             None 이면 get_session() 으로 fallback. 캡처된 세션은 _CURRENT_SESSION 이
             nulled 된 뒤에도 자체 license_token 으로 send_trace/_post_async 전송 가능 →
             end_session() race 로 인한 telemetry 유실 방지.
+        max_pages: 렌더 범위(첫 N 페이지). None 이면 전체 문서. 편집 스코프(예: 첫 페이지)
+            와 동일하게 맞추면 헤비 문서(전체 PDF 익스포트 hang)도 page 단위로 안전 렌더.
     """
     try:
-        # 1. 렌더 (실패/빈 list 면 abort).
-        pngs = render_doc_to_pngs(hwp)
+        # 1. 렌더 (실패/빈 list 면 abort). max_pages 로 렌더 스코프 == 편집 스코프.
+        pngs = render_doc_to_pngs(hwp, max_pages=max_pages)
         if not pngs:
             return
 

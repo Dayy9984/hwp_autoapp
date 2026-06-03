@@ -6259,14 +6259,31 @@ class ContentModifier:
                 return True
 
             def _execute_replacement(self, params: ReplacementParams, ctx: BlockContext):
-                """문단 내부에서 대체 (para_pos 경계 확인)"""
+                """문단 내부에서 대체 (para_pos 경계 확인).
+
+                safety 한도 + forward-progress(wrap) 가드로 무한 루프를 막는다.
+                hwp.find 는 문서 끝에서 처음으로 wrap-around 하므로, 단일 매치라도
+                find 가 계속 True 를 반환해 같은 문단(para_pos 동일)을 재매치하면
+                while 가 영영 끝나지 않고 InsertText 가 무한 반복 → HWP COM 프리징.
+                (형제 CellReplacer 가 safety<400 으로 묶여 hang 하지 않는 것과 대비.)
+                cur_pos 가 직전 매치보다 앞서지 못하면(=wrap/제자리) 중단한다.
+                """
                 start_pos = self.hwp.get_pos()
-                while True:
+                safety = 0
+                prev_pos = None
+                while safety < 400:
+                    safety += 1
                     found = self.hwp.find(params.old_text, direction="Forward", regex=False)
                     if not found:
                         break
-                    if self.hwp.get_pos()[1] != start_pos[1]:
+                    cur_pos = self.hwp.get_pos()
+                    # 대상 문단을 벗어났으면 중단(다른 문단을 건드리지 않음).
+                    if not cur_pos or cur_pos[1] != start_pos[1]:
                         break
+                    # 직전 매치보다 전진하지 못함(wrap-around / 제자리) → 무한 루프 방지.
+                    if prev_pos is not None and cur_pos <= prev_pos:
+                        break
+                    prev_pos = cur_pos
                     self.modifier._insert_styled_content(params.get_replacement())
 
         # Factory Pattern for strategy selection

@@ -338,12 +338,12 @@ def _run_vision(processor, instruction: Optional[str], ops: List[Dict[str, Any]]
     save_as PDF call does not exhibit the multi-op apply hang, so no watchdog is
     needed here.
 
-    ``max_pages``: when set, only the FIRST ``max_pages`` rendered PNG(s) are
-    passed to the vision verifier. The renderer always exports the whole doc to
-    PDF (a single COM call), so we slice its output rather than re-rendering —
-    this caps the vision input to page 1 (default), which is what FILL also
-    scopes to, so every form is judged on the same scope. The huge 47-page input
-    that produced the unparseable vision response (form 1f379b) cannot recur.
+    ``max_pages``: when set, the renderer renders ONLY the first ``max_pages``
+    page(s) directly (raw COM ``CreatePageImage`` per page) — it does NOT export
+    the whole document to PDF. This is what keeps heavy docs from hanging
+    (340a07: full-PDF save_as hangs / RPC-dies even with no edits; 1f379b: 47p),
+    and it caps the vision input to the same scope FILL edits (page 1 by
+    default), so every form is judged on the same scope.
     """
     from services.hwp_renderer import render_doc_to_pngs
 
@@ -354,7 +354,7 @@ def _run_vision(processor, instruction: Optional[str], ops: List[Dict[str, Any]]
     last_err = "render_failed"
     for h in handles:
         try:
-            result = render_doc_to_pngs(h)
+            result = render_doc_to_pngs(h, max_pages=max_pages)
         except Exception as e:  # pragma: no cover - COM runtime
             last_err = f"render_exception:{e}"
             continue
@@ -366,6 +366,7 @@ def _run_vision(processor, instruction: Optional[str], ops: List[Dict[str, Any]]
         return {"items": [], "error": last_err, "page_count": 0}
     total_pages = len(pngs)
     if max_pages and max_pages > 0:
+        # 렌더러가 이미 첫 max_pages 만 만들지만, 방어적으로 한번 더 slice.
         pngs = pngs[:max_pages]
     verdict = _verify_vision_with_retry(
         model=model,
@@ -549,10 +550,21 @@ def _stream_codex_edits(
         }
         if context_id:
             delta["context_id"] = context_id
+        # Per-op trace (eval harness only): the cooperative budget above is checked
+        # BETWEEN ops, so a single execute_delta that blocks inside COM (observed on
+        # nested/merged-table cell ops, e.g. form 3c4a) hangs forever and the budget
+        # never fires. Logging id+action *before* the call lets us read the last line
+        # in the frozen log to pinpoint the deadlocking op. flush so it survives a kill.
+        op_name = (cmd.metadata or {}).get("operation") or action
+        print(f"[auto_eval][apply] op {idx + 1}/{len(collected)} id={cmd.id} "
+              f"op={op_name} action={action}", file=sys.stderr, flush=True)
         try:
             result = processor.execute_delta(delta)
         except Exception as e:  # pragma: no cover - COM runtime
             result = {"success": False, "error": str(e)}
+        print(f"[auto_eval][apply] op {idx + 1} id={cmd.id} done "
+              f"success={isinstance(result, dict) and result.get('success')}",
+              file=sys.stderr, flush=True)
         if isinstance(result, dict):
             if result.get("success"):
                 counters["applied"] += 1
