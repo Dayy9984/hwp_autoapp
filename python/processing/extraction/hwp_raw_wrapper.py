@@ -486,17 +486,33 @@ class HwpRawWrapper:
             return -1
 
     def find(self, text, direction="Forward", regex=False):
-        """텍스트 찾기 (pyhwpx 호환)"""
+        """텍스트 찾기 (pyhwpx 호환).
+
+        HAction.Execute("RepeatFind") 가 매칭 실패 시 "문서의 처음/끝까지 찾았습니다" dialog 노출.
+        호출 전후 SetMessageBoxMode 으로 dialog 차단 + caller 의 prev_mode 복원.
+        """
+        prev_mode = None
         try:
-            pset = self._raw.HParameterSet.HFindReplace
-            self._raw.HAction.GetDefault("RepeatFind", pset.HSet)
-            pset.FindString = text
-            pset.Direction = 0 if direction == "Forward" else 1
-            pset.UseWildCards = regex
-            pset.FindRegExp = regex
-            return self._raw.HAction.Execute("RepeatFind", pset.HSet)
-        except Exception:
-            return False
+            try:
+                prev_mode = self._raw.SetMessageBoxMode(0x2FFF1)
+            except Exception:
+                prev_mode = None
+            try:
+                pset = self._raw.HParameterSet.HFindReplace
+                self._raw.HAction.GetDefault("RepeatFind", pset.HSet)
+                pset.FindString = text
+                pset.Direction = 0 if direction == "Forward" else 1
+                pset.UseWildCards = regex
+                pset.FindRegExp = regex
+                return self._raw.HAction.Execute("RepeatFind", pset.HSet)
+            except Exception:
+                return False
+        finally:
+            if prev_mode is not None:
+                try:
+                    self._raw.SetMessageBoxMode(prev_mode)
+                except Exception:
+                    pass
 
     def TableRightCell(self):
         """테이블 오른쪽 셀로 이동"""

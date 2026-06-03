@@ -1864,6 +1864,15 @@ class FileSearchService:
 
 
 
+        # file_name 비교 정규화 — 한글 NFC/NFD, 공백 차이 등 인코딩 변동 흡수
+        def _norm(s: str) -> str:
+            try:
+                import unicodedata
+                return unicodedata.normalize("NFC", str(s or "")).strip().casefold()
+            except Exception:
+                return str(s or "").strip().lower()
+        target_name_norm = _norm(file_name) if file_name else ""
+
         for vector_store_id, scope_label in scopes_to_search:
 
 
@@ -1890,6 +1899,17 @@ class FileSearchService:
 
             )
 
+            # filter 적용했는데 0건이면 — file_name 인코딩/정규화 차이 가능성.
+            # filter 없이 재시도 + 클라이언트 측에서 정규화 비교.
+            if file_name and not scope_hits:
+                debug(f"[FILE_SEARCH] filter='{file_name}' 0건 — unfiltered retry")
+                scope_hits = self._search_vector_store(
+                    vector_store_id=vector_store_id,
+                    query_text=query_text,
+                    top_k=top_k,
+                    filters=None,
+                )
+
 
 
             for hit in scope_hits:
@@ -1908,7 +1928,7 @@ class FileSearchService:
 
 
 
-                if file_name and source_name != file_name:
+                if file_name and _norm(source_name) != target_name_norm:
 
 
 

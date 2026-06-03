@@ -125,6 +125,15 @@ class HwpConnector:
         session_state.store_runtime_target_process_id(pid)
         session_state.store_runtime_target_window_handle(hwnd)
 
+        # 모든 모달 다이얼로그 영구 차단 ("문서의 끝까지 찾았습니다 처음부터 찾을까요?" 등).
+        # find/replace 호출이 끝까지 도달 시 HWP COM 이 modal popup 띄우면
+        # 자동화 흐름이 중단되므로 binding 직후 한 번만 설정.
+        try:
+            if hasattr(self._hwp, 'SetMessageBoxMode'):
+                self._hwp.SetMessageBoxMode(0)
+        except Exception:
+            pass
+
         return True
 
     def _is_target_alive(self, pid: Optional[int], hwnd: Optional[int]) -> bool:

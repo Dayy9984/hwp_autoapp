@@ -72,6 +72,14 @@ try:
 except ImportError:
     pass  # pythoncom이 없는 환경에서는 스킵
 
+# pyhwpx Hwp.find() finally 의 MessageBoxMode(0xFFFFF) 복원 버그 패치 (1회 idempotent).
+# 패치 안 하면 find() 후 caller 의 SetMessageBoxMode(0) 가 무력화 → 다이얼로그 노출.
+try:
+    from engine.connection.pyhwpx_patch import apply_find_patch
+    apply_find_patch()
+except Exception as _patch_err:
+    print(f"[pyhwpx_patch] apply 실패: {_patch_err}", file=sys.stderr)
+
 # 현재 구조 기반 import
 from engine.connection.document_connector import HwpConnector
 from engine.connection.document_collector import DocumentMetadataCollector

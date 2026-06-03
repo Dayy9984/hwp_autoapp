@@ -2,7 +2,7 @@ import json
 import os
 import re
 from datetime import datetime
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
 from processing.extraction.hwp_raw_wrapper import HwpRawWrapper
@@ -5324,7 +5324,192 @@ class ContentModifier:
         if not builder.prepare():
             return True  # Bypassed (스킵됨, 성공으로 간주)
 
-        return builder.execute()
+        # AI 가 font_size/font_family 명시 안 한 경우 기존 서식 백업 → 복원 (기존 서식 무조건 유지).
+        # AI 가 명시한 경우엔 사용자 의도 우선 — 백업 skip.
+        preserve_shape = kwargs.get("font_size") is None and kwargs.get("font_family") is None
+        saved_shape = self._backup_charshape_at_block(block_id) if preserve_shape else None
+
+        result = builder.execute()
+
+        if saved_shape and result:
+            self._restore_charshape_at_block(block_id, saved_shape)
+
+        return result
+
+    # 백업 대상 CharShape 속성 — 글자 모양 모든 속성 (자간, 장평, 베이스라인, 폰트, 색상, 윤곽 등).
+    _CHARSHAPE_PROPS = (
+        "Height",                # 글자 크기
+        "Bold", "Italic", "UnderlineType", "UnderlineShape", "UnderlineColor",
+        "StrikeOutType", "StrikeOutShape", "StrikeOutColor",
+        "TextColor", "ShadeColor", "OutLineType", "ShadowType", "ShadowColor",
+        "ShadowOffsetX", "ShadowOffsetY",
+        "Spacing",               # 자간 (글자 간격)
+        "Ratio",                 # 장평 (가로 비율)
+        "RelSize",               # 상대 크기
+        "OffsetY",               # 베이스라인
+        "FaceNameUser", "FaceNameSymbol", "FaceNameOther",
+        "FaceNameJapanese", "FaceNameHanja", "FaceNameLatin", "FaceNameHangul",
+        "EmphasizeType", "BorderFillId",
+    )
+    # 백업 대상 ParaShape 속성 — 문단 모양 (줄간격, 정렬, 들여쓰기, 여백).
+    _PARASHAPE_PROPS = (
+        "LineSpacing", "LineSpacingType",
+        "LeftMargin", "RightMargin", "Indentation",
+        "PrevSpacing", "NextSpacing",
+        "AlignType",
+        "BreakLatinWord", "BreakNonLatinWord", "SnapToGrid",
+        "Condense", "FontLineHeight", "FontLineHeightType",
+        "TextDir", "VertAlign",
+    )
+
+    # inline 변동 detection 시 비교 대상 — 가장 흔히 인지되는 속성만
+    _CRITICAL_CHAR_KEYS = ("Height", "FaceNameHangul", "FaceNameLatin", "Bold", "Italic", "TextColor")
+
+    def _capture_charshape_props(self) -> Dict[str, Any]:
+        """현재 cursor 위치의 CharShape 모든 속성 캡처."""
+        cs = self.hwp.HParameterSet.HCharShape
+        self.hwp.HAction.GetDefault("CharShape", cs.HSet)
+        out: Dict[str, Any] = {}
+        for prop in self._CHARSHAPE_PROPS:
+            try:
+                out[prop] = getattr(cs, prop)
+            except Exception:
+                pass
+        return out
+
+    def _backup_charshape_at_block(self, block_id: str) -> Optional[Dict[str, Any]]:
+        """block_id 의 paragraph 의 현재 CharShape + ParaShape 모두 백업.
+
+        AI 가 서식 인자 명시 안 한 replace 호출 시 기존 서식 전체 보존을 위해 사용.
+        실패 시 None — 호출자가 복원 skip.
+
+        paragraph 시작과 끝의 CharShape 비교 → 다르면 inline 변동 표시 — 복원 시
+        통일 적용 skip 으로 inline 손실 방지.
+        """
+        try:
+            position = self.segment_registry.get_adjusted_position(block_id) if self.segment_registry else None
+            if not position:
+                return None
+
+            # paragraph 시작 위치 의 CharShape
+            self.hwp.set_pos(*position)
+            char_start = self._capture_charshape_props()
+
+            # paragraph 끝 위치 의 CharShape — MoveSelParaEnd 후 select 해제 + 끝 위치 의 charshape
+            try:
+                self.hwp.HAction.Run("MoveSelParaEnd")
+                end_pos = self.hwp.GetPos()
+                try:
+                    self.hwp.HAction.Run("Cancel")
+                except Exception:
+                    pass
+                self.hwp.SetPos(*end_pos)
+                char_end = self._capture_charshape_props()
+            except Exception:
+                char_end = dict(char_start)
+
+            # inline 변동 detection
+            inline_varied = False
+            for key in self._CRITICAL_CHAR_KEYS:
+                if char_start.get(key) != char_end.get(key):
+                    inline_varied = True
+                    break
+
+            # ParaShape — paragraph 단위라 시작 위치 만으로 OK
+            self.hwp.set_pos(*position)
+            ps = self.hwp.HParameterSet.HParaShape
+            self.hwp.HAction.GetDefault("ParagraphShape", ps.HSet)
+            para_props: Dict[str, Any] = {}
+            for prop in self._PARASHAPE_PROPS:
+                try:
+                    para_props[prop] = getattr(ps, prop)
+                except Exception:
+                    pass
+
+            return {
+                "char": char_start,
+                "char_end": char_end,
+                "para": para_props,
+                "inline_varied": inline_varied,
+            }
+        except Exception:
+            return None
+
+    def _restore_charshape_at_block(self, block_id: str, saved: Dict[str, Any]) -> None:
+        """저장된 CharShape + ParaShape 으로 paragraph 복원.  fire-and-forget — 실패해도 silent.
+
+        inline 변동 감지 시 (paragraph 안에 다른 글자 크기/폰트 혼재):
+          - CharShape 통일 적용 skip — paragraph 안 inline 변동 손실 방지
+          - ParaShape 만 복원 (paragraph 단위 속성: 줄간격/정렬/들여쓰기 — 항상 안전)
+          - 새 text 의 inline 은 HWP COM default (insertion point charshape) 으로 처리
+        """
+        try:
+            position = self.segment_registry.get_adjusted_position(block_id) if self.segment_registry else None
+            if not position:
+                return
+
+            inline_varied = bool(saved.get("inline_varied"))
+
+            # CharShape 복원 — inline 변동 없을 때만 (paragraph 통일 charshape 일 때)
+            if not inline_varied:
+                # paragraph 전체 select
+                self.hwp.set_pos(*position)
+                try:
+                    self.hwp.HAction.Run("MoveSelParaEnd")
+                except Exception:
+                    try:
+                        self.hwp.MoveSelParaEnd()
+                    except Exception:
+                        pass
+
+                char_props = saved.get("char") or {}
+                if char_props:
+                    cs = self.hwp.HParameterSet.HCharShape
+                    self.hwp.HAction.GetDefault("CharShape", cs.HSet)
+                    for key, value in char_props.items():
+                        try:
+                            setattr(cs, key, value)
+                        except Exception:
+                            pass
+                    try:
+                        self.hwp.HAction.Execute("CharShape", cs.HSet)
+                    except Exception:
+                        pass
+
+                try:
+                    self.hwp.Cancel()
+                except Exception:
+                    pass
+            else:
+                try:
+                    self.log_to_main(
+                        f"[INFO] paragraph {block_id}: inline charshape 변동 감지 → CharShape 통일 skip (inline 손실 방지)"
+                    )
+                except Exception:
+                    pass
+
+            # ParaShape 복원 — paragraph 단위 속성이라 inline 변동과 무관, 항상 안전
+            para_props = saved.get("para") or {}
+            if para_props:
+                self.hwp.set_pos(*position)
+                ps = self.hwp.HParameterSet.HParaShape
+                self.hwp.HAction.GetDefault("ParagraphShape", ps.HSet)
+                for key, value in para_props.items():
+                    try:
+                        setattr(ps, key, value)
+                    except Exception:
+                        pass
+                try:
+                    self.hwp.HAction.Execute("ParagraphShape", ps.HSet)
+                except Exception:
+                    pass
+
+            try:
+                self.hwp.Cancel()
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def _append_paragraph_impl(self, block_id: str, new_text: str = None, **kwargs) -> bool:
         """append_paragraph 내부 구현.
@@ -5341,9 +5526,18 @@ class ContentModifier:
         style_keys = ("font_size", "font_family", "align", "spacing", "indentation")
         style_opts = {key: kwargs.get(key) for key in style_keys}
 
-        return self.append_content_elements(
+        # AI 가 서식 명시 안 한 경우 기존 paragraph 서식 백업 → append 후 복원.
+        preserve_shape = style_opts.get("font_size") is None and style_opts.get("font_family") is None
+        saved_shape = self._backup_charshape_at_block(block_id) if preserve_shape else None
+
+        result = self.append_content_elements(
             block_id, content_value, block_type="paragraph", **style_opts
         )
+
+        if saved_shape and result:
+            self._restore_charshape_at_block(block_id, saved_shape)
+
+        return result
 
     def append_paragraph_content(self, block_id: str, new_text: str = None, **kwargs) -> bool:
         """하위 호환 alias. 표준 API는 append_paragraph."""
@@ -5446,7 +5640,17 @@ class ContentModifier:
         builder = ListReplacementBuilder(self, block_id, {**kwargs, "new_text": new_text})
         if not builder.prepare():
             return True  # Bypassed
-        return builder.execute()
+
+        # AI 가 font_size/font_family 명시 안 한 경우 기존 서식 백업 → 복원.
+        preserve_shape = kwargs.get("font_size") is None and kwargs.get("font_family") is None
+        saved_shape = self._backup_charshape_at_block(block_id) if preserve_shape else None
+
+        result = builder.execute()
+
+        if saved_shape and result:
+            self._restore_charshape_at_block(block_id, saved_shape)
+
+        return result
 
     def append_to_list(self, block_id: str, new_text: str = None, **kwargs) -> bool:
         """지정 세그먼트 뒤에 새 리스트 항목 추가
@@ -5463,9 +5667,18 @@ class ContentModifier:
         formatting_attrs = ["font_size", "font_family", "align", "spacing", "indentation"]
         format_dict = {attr: kwargs.get(attr) for attr in formatting_attrs}
 
-        return self.append_content_elements(
+        # 서식 명시 안 된 경우 기존 list item 서식 백업/복원.
+        preserve_shape = format_dict.get("font_size") is None and format_dict.get("font_family") is None
+        saved_shape = self._backup_charshape_at_block(block_id) if preserve_shape else None
+
+        result = self.append_content_elements(
             block_id, content_value, block_type="list", **format_dict
         )
+
+        if saved_shape and result:
+            self._restore_charshape_at_block(block_id, saved_shape)
+
+        return result
 
     def remove_list(self, block_id: str) -> bool:
         """블록 ID 기반 리스트를 삭제"""
@@ -6107,20 +6320,65 @@ class ContentModifier:
     def _execute_content_element_removal(
         self, seg_id: str, coords: Tuple[int, int, int], elem_type: str
     ) -> bool:
-        """콘텐츠 요소 제거 실행"""
+        """콘텐츠 요소 제거 실행.
+
+        이전 동작: MoveSelParaEnd + DeleteBack 2회.
+          1차 DeleteBack: select 부분 (paragraph 본문) 삭제
+          2차 DeleteBack: paragraph break 삭제 (paragraph 자체 제거)
+        문제: paragraph 가 짧거나 빈 경우 2차 DeleteBack 이 이전 paragraph 의 끝 글자 삭제.
+          사용자 신고 케이스 일치 ("범위가 아닌 다른 곳을 지워버림").
+
+        새 동작:
+          1. cursor 를 paragraph 시작에 setpos
+          2. MoveSelParaEnd 로 paragraph 본문 select
+          3. select 끝을 다음 paragraph 시작 까지 확장 (MoveSelectNextParaBegin / MoveSelectRight)
+          4. Delete (1회) — select 영역 정확히 삭제 = paragraph 자체 제거
+          5. 이전 paragraph 영역 절대 침범 안 함
+        """
         type_labels = {"list": "리스트", "paragraph": "문단"}
         label = type_labels.get(elem_type, "블록")
 
         try:
             self.hwp.set_pos(coords[0], coords[1], coords[2])
             self.hwp.MoveSelParaEnd()
-            self.hwp.DeleteBack()
-            self.hwp.DeleteBack()
 
-            # 리스트 타입은 추가 삭제 필요
+            # select 끝을 paragraph break 너머 (다음 paragraph 시작) 까지 확장.
+            # 우선 MoveSelectNextParaBegin (paragraph block 단위 안전) → 실패 시 MoveSelectRight (1 char).
+            extended = False
+            for action_name in ("MoveSelectNextParaBegin", "MoveSelectRight", "MoveSelDown"):
+                try:
+                    self.hwp.HAction.Run(action_name)
+                    extended = True
+                    break
+                except Exception:
+                    continue
+
+            if extended:
+                # select 영역 한 번에 삭제 — 이전 paragraph 안 건드림
+                try:
+                    self.hwp.HAction.Run("Delete")
+                except Exception:
+                    try:
+                        self.hwp.Delete()
+                    except Exception:
+                        # 마지막 fallback — 기존 동작 (단 회귀 위험 존재)
+                        self.hwp.DeleteBack()
+                        self.hwp.DeleteBack()
+            else:
+                # select 확장 실패 — 기존 동작 fallback (이전 paragraph 끝 글자 손실 위험)
+                self.log_to_main(
+                    f"[WARN] {label} 제거: select 확장 실패 ({seg_id}) — fallback DeleteBack 2회"
+                )
+                self.hwp.DeleteBack()
+                self.hwp.DeleteBack()
+
+            # 리스트 타입은 추가 삭제 필요 (list marker 까지)
             extra_deletion_types = {"list"}
             if elem_type in extra_deletion_types:
-                self.hwp.DeleteBack()
+                try:
+                    self.hwp.DeleteBack()
+                except Exception:
+                    pass
 
             self.log_to_main(f"[OK] {label} 제거 완료: {seg_id}")
             return True
@@ -6441,6 +6699,10 @@ class ContentModifier:
             spacing: 문단 간격
             indentation: 들여쓰기
         """
+        # 서식 명시 안 됐으면 기존 셀 서식 백업 — 함수 끝에서 복원.
+        _preserve = kwargs.get("font_size") is None and kwargs.get("font_family") is None
+        _saved_shape = self._backup_charshape_at_block(block_id) if _preserve else None
+
         from dataclasses import dataclass
         from typing import Optional, Tuple
         from abc import ABC, abstractmethod
@@ -6715,11 +6977,14 @@ class ContentModifier:
 
             # 7. 메트릭 계산 및 업데이트
             counter = MarkupAwareParagraphCounter()
-            return (builder
+            _result = (builder
                 .compute_metrics(added_cells, counter)
                 .update_registry(self.segment_registry)
                 .save_continuation_state(self, self.hwp.get_pos)
                 .finalize(self._schedule_table_boundary_validation))
+            if _saved_shape and _result:
+                self._restore_charshape_at_block(block_id, _saved_shape)
+            return _result
 
         except Exception as e:
             self.log_to_main(f"[ERROR] 셀 블록 {config.block_id} 내용 교체 실패: {e}")
@@ -9370,9 +9635,16 @@ class ContentModifier:
             position = self.segment_registry.get_position(str(block_id))
             if not position:
                 return False
+            # 서식 명시 안 됐으면 기존 서식 백업 → text 교체 → 복원.
+            preserve_shape = kwargs.get("font_size") is None and kwargs.get("font_family") is None
+            saved_shape = self._backup_charshape_at_block(block_id) if preserve_shape else None
+
             self.hwp.set_pos(*position)
             self.hwp.find(self.segment_registry.get_text(str(block_id)) or "")
             self._insert_with_style(new_text if new_text is not None else "")
+
+            if saved_shape:
+                self._restore_charshape_at_block(block_id, saved_shape)
             return True
         except Exception:
             return False

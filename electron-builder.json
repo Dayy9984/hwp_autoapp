@@ -22,22 +22,22 @@
     {
       "from": "python/dist/inserty_python",
       "to": "python/inserty_python",
-      "filter": ["**/*"]
+      "filter": ["**/*", "!**/*.build/**", "!**/*.build"]
     },
     {
       "from": "python/dist/inserty_agent",
       "to": "python/inserty_agent",
-      "filter": ["**/*"]
+      "filter": ["**/*", "!**/*.build/**", "!**/*.build"]
     },
     {
       "from": "python/dist/hwp_window_monitor",
       "to": "python/hwp_window_monitor",
-      "filter": ["**/*"]
+      "filter": ["**/*", "!**/*.build/**", "!**/*.build"]
     },
     {
       "from": "python/dist/inserty_file_reader",
       "to": "python/inserty_file_reader",
-      "filter": ["**/*"]
+      "filter": ["**/*", "!**/*.build/**", "!**/*.build"]
     }
   ],
   "win": {
