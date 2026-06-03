@@ -172,13 +172,16 @@ def step_2_build_with_nuitka(process_config):
     ]
 
     # Nuitka 명령 구성
+    # 캐싱 최적화:
+    #   - --remove-output 제거: .build 디렉토리 보존 → 다음 빌드 시 incremental
+    #   - --lto=no: LTO 시간 큼 (수 분 → 수십 분). standalone 이라 lto 효과 제한
+    #   - CCACHE_DIR env: 아래 env 설정에서 명시 → ccache 가 .o 파일 hash 캐싱
     cmd = [
         sys.executable, "-m", "nuitka",
         "--standalone",
-        "--remove-output",
 
         # 최적화
-        "--lto=yes",
+        "--lto=no",
         "--assume-yes-for-downloads",
 
         # 진행률 표시 + 병렬 컴파일
@@ -232,6 +235,13 @@ def step_2_build_with_nuitka(process_config):
     env.pop('CC', None)
     env.pop('CXX', None)
 
+    # ccache 캐싱: Nuitka 가 자동 다운로드한 ccache.exe 가 env CCACHE_DIR 위치에 .o 캐싱
+    # 미설정 시 Nuitka --mingw64 빌드에서 cache hit 0 (확인됨)
+    ccache_dir = ROOT_DIR.parent / ".nuitka-ccache"
+    ccache_dir.mkdir(exist_ok=True)
+    env['CCACHE_DIR'] = str(ccache_dir)
+    env['CCACHE_MAXSIZE'] = '20G'  # 4 process * dist 약 4GB → 여유
+
     try:
         # subprocess.run()으로 명시적 환경 변수 전달 (TTY 상속으로 progress bar 표시)
         import subprocess
@@ -261,6 +271,11 @@ def step_2_build_with_nuitka(process_config):
                 print(f"  이동 완료: {output_dir}")
             else:
                 print(f"  경고: .dist 폴더 없음 - {dist_folder}")
+
+            # .build 폴더 — Nuitka 의 incremental 작업물 (.o + .c). 보존 시 다음 빌드 시 mtime
+            # 기반 skip 가능 (ccache 보다 더 빠름). packaging 시 1.6GB 낭비 우려 있으나
+            # electron-builder.json 의 extraResources filter 으로 제외 처리.
+
             print(f"{name} 빌드 완료\n")
             return True
         else:
@@ -281,12 +296,22 @@ def main():
     print("64-bit 단일 빌드 - Windows COM 마샬링으로 32-bit HWP 호환")
     print("\n")
 
-    # 1. Clean
-    step_1_clean()
+    # BUILD_ONLY 환경변수로 단일 process 선택적 빌드 지원.
+    # 예: BUILD_ONLY=inserty_python  → hwp_com_process 만 재빌드 (full clean skip).
+    only = os.environ.get("BUILD_ONLY", "").strip()
+    if only:
+        targets = [p for p in PROCESSES if p["output"] == only]
+        if not targets:
+            print(f"BUILD_ONLY={only} 매칭되는 process 없음. 사용 가능: {[p['output'] for p in PROCESSES]}")
+            sys.exit(1)
+        print(f"BUILD_ONLY={only} → {len(targets)} process 만 재빌드 (clean skip)\n")
+    else:
+        targets = PROCESSES
+        step_1_clean()  # 전체 빌드 시에만 clean
 
-    # 2. Nuitka 빌드 (4개 프로세스)
+    # 2. Nuitka 빌드
     results = {}
-    for process in PROCESSES:
+    for process in targets:
         success = step_2_build_with_nuitka(process)
         results[process["name"]] = success
 

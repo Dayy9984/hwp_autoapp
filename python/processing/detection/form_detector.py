@@ -729,23 +729,38 @@ class FormDetector:
             return False
     
     def repeat_find(self) -> bool:
-        """이전 검색 조건으로 다음 항목 찾기
-        
+        """이전 검색 조건으로 다음 항목 찾기.
+
+        HAction.Run("RepeatFind") 가 매칭 실패 시 "문서의 처음/끝까지 찾았습니다" dialog 노출.
+        호출 전후 SetMessageBoxMode 으로 dialog 차단 + caller prev_mode 복원.
+
         Returns:
             bool: 찾음 여부
         """
+        prev_mode = None
         try:
             raw_hwp = self._get_raw_hwp()
-            
+
             if hasattr(raw_hwp, 'HAction'):
+                try:
+                    prev_mode = raw_hwp.SetMessageBoxMode(0x2FFF1)
+                except Exception:
+                    prev_mode = None
                 result = raw_hwp.HAction.Run("RepeatFind")
                 return bool(result)
-            
+
             return False
-            
+
         except Exception as e:
             self._log("error", f"repeat_find failed: {e}")
             return False
+        finally:
+            if prev_mode is not None:
+                try:
+                    raw_hwp = self._get_raw_hwp()
+                    raw_hwp.SetMessageBoxMode(prev_mode)
+                except Exception:
+                    pass
     
     # ============================================================
     # 6. 고수준 감지 함수

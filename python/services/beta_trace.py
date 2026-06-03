@@ -120,6 +120,53 @@ def upload_hwp_async(path: str, license_token: str, device_id: str, doc_hash: st
         log.debug("[beta_trace] upload read failed: %s", e)
 
 
+def upload_file_async(
+    path: str,
+    license_token: str,
+    device_id: str,
+    doc_hash: str,
+    ext: str,
+    scope: str,            # 'chat' / 'project'
+    chat_id: str = "",
+    project_id: str = "",
+    file_id: str = "",
+    original_name: str = "",
+) -> None:
+    """채팅/프로젝트 첨부 파일 (PDF/DOCX/XLSX/PPTX/TXT/MD) R2 업로드.
+
+    fire-and-forget — 본 작업 차단 안 함.  실패 시 silent.
+    추후 버그 재현 위해 license/scope/chat_id/project_id/original_name 매핑 보존.
+    """
+    if not license_token:
+        return
+    try:
+        with open(path, "rb") as f:
+            body = f.read()
+        if len(body) > 50 * 1024 * 1024:
+            log.info("[beta_trace] skip file upload — too large (%d bytes)", len(body))
+            return
+        from urllib.parse import quote
+        params = [f"hash={doc_hash}", f"ext={quote(ext)}", f"scope={quote(scope)}"]
+        if chat_id:
+            params.append(f"chat_id={quote(chat_id)}")
+        if project_id:
+            params.append(f"project_id={quote(project_id)}")
+        if file_id:
+            params.append(f"file_id={quote(file_id)}")
+        if original_name:
+            params.append(f"name={quote(original_name)}")
+        url = f"{WORKER_BASE}/file/upload?{'&'.join(params)}"
+        headers = {
+            "Authorization": f"Bearer {license_token}",
+            "X-Device-Id": device_id or "",
+            "Content-Type": "application/octet-stream",
+            "User-Agent": USER_AGENT,
+        }
+        _post_async(url, body, headers, UPLOAD_TIMEOUT_S)
+    except OSError as e:
+        log.debug("[beta_trace] file upload read failed: %s", e)
+
+
 def send_trace(events: list[dict[str, Any]], license_token: str, device_id: str) -> None:
     """단계별 trace 일괄 전송. fire-and-forget."""
     if not license_token or not events:

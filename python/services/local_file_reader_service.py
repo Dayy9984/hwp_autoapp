@@ -290,13 +290,67 @@ class LocalFileReaderService:
                 pass
 
     def _read_via_llamaindex(self, abs_path: str) -> str:
-        """LlamaIndex SimpleDirectoryReader 기반 텍스트 추출."""
+        """LlamaIndex SimpleDirectoryReader 기반 텍스트 추출.
+
+        LlamaIndex 미설치 시 확장자별 fallback (PyPDF2 / python-docx / openpyxl / python-pptx / plain read).
+        """
         try:
             from llama_index.core import SimpleDirectoryReader
+            docs = SimpleDirectoryReader(input_files=[abs_path]).load_data()
+            return "\n\n".join(doc.text for doc in docs if doc.text)
         except ImportError:
-            return self._read_hwp_subprocess(abs_path)
-        docs = SimpleDirectoryReader(input_files=[abs_path]).load_data()
-        return "\n\n".join(doc.text for doc in docs if doc.text)
+            return self._read_via_native_fallback(abs_path)
+        except Exception as exc:
+            # LlamaIndex 가 특정 파일 읽기 실패 시 native fallback 시도
+            fallback = self._read_via_native_fallback(abs_path)
+            if fallback:
+                return fallback
+            raise
+
+    def _read_via_native_fallback(self, abs_path: str) -> str:
+        """LlamaIndex 미설치 또는 실패 시 확장자별 직접 추출."""
+        ext = os.path.splitext(abs_path)[1].lower()
+        try:
+            if ext == ".pdf":
+                from PyPDF2 import PdfReader
+                reader = PdfReader(abs_path)
+                return "\n\n".join((p.extract_text() or "") for p in reader.pages)
+            if ext == ".docx":
+                from docx import Document
+                doc = Document(abs_path)
+                return "\n".join(p.text for p in doc.paragraphs if p.text)
+            if ext in (".xlsx", ".xls", ".xlsm"):
+                from openpyxl import load_workbook
+                wb = load_workbook(abs_path, data_only=True, read_only=True)
+                parts: List[str] = []
+                for ws in wb.worksheets:
+                    parts.append(f"# {ws.title}")
+                    for row in ws.iter_rows(values_only=True):
+                        cells = [str(c) for c in row if c is not None]
+                        if cells:
+                            parts.append("\t".join(cells))
+                return "\n".join(parts)
+            if ext == ".pptx":
+                from pptx import Presentation
+                prs = Presentation(abs_path)
+                parts: List[str] = []
+                for i, slide in enumerate(prs.slides, 1):
+                    parts.append(f"# Slide {i}")
+                    for shape in slide.shapes:
+                        if hasattr(shape, "text") and shape.text:
+                            parts.append(shape.text)
+                return "\n".join(parts)
+            if ext in (".txt", ".md"):
+                for enc in ("utf-8", "cp949", "euc-kr", "utf-16"):
+                    try:
+                        with open(abs_path, "r", encoding=enc) as f:
+                            return f.read()
+                    except UnicodeDecodeError:
+                        continue
+                return ""
+        except Exception as exc:
+            return f"[{ext} 파일 읽기 오류: {exc}]"
+        return ""
 
     # ------------------------------------------------------------------
     # Keyword search (file_name 미지정)
