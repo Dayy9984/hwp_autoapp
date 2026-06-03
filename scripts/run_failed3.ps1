@@ -26,7 +26,7 @@ $hashes = @(
 function Is-Clean($short) {
   $f = "$OUT\eval-$TAG.jsonl"
   if (-not (Test-Path $f)) { return $false }
-  $rec = Get-Content $f -EA SilentlyContinue | ForEach-Object { try { $_ | ConvertFrom-Json } catch {} } | Where-Object { $_.name -like "*$short*" } | Select-Object -Last 1
+  $rec = Get-Content $f -Encoding UTF8 -EA SilentlyContinue | ForEach-Object { try { $_ | ConvertFrom-Json } catch {} } | Where-Object { $_.name -like "*$short*" } | Select-Object -Last 1
   if (-not $rec) { return $false }
   if ($rec.error) { return $false }
   if (-not $rec.vision.overall) { return $false }

@@ -36,7 +36,9 @@ $byShort = @{}; foreach ($h in $hashes) { $byShort[$h.Substring(0,12)] = $h }
 function Is-Clean($short) {
   $f = "$OUT\eval-$TAG.jsonl"
   if (-not (Test-Path $f)) { return $false }
-  $rec = Get-Content $f -EA SilentlyContinue | ForEach-Object { try { $_ | ConvertFrom-Json } catch {} } | Where-Object { $_.name -like "*$short*" } | Select-Object -Last 1
+  # -Encoding UTF8 필수: jsonl 은 UTF-8(한글 포함). 미지정 시 PS5.1 이 cp949 로 읽어
+  # ConvertFrom-Json 이 깨져 항상 not-clean → 불필요한 3x 재시도(시간 낭비).
+  $rec = Get-Content $f -Encoding UTF8 -EA SilentlyContinue | ForEach-Object { try { $_ | ConvertFrom-Json } catch {} } | Where-Object { $_.name -like "*$short*" } | Select-Object -Last 1
   if (-not $rec) { return $false }
   if ($rec.error) { return $false }
   $ov = $rec.vision.overall

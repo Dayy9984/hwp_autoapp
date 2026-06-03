@@ -5923,8 +5923,20 @@ class DocumentProcessor:
             # 검증 파이프라인 트리거 (스펙 §5.2): diff 모드 + 실제 편집 발생 시
             # 백그라운드 스레드로 렌더→비전→집계→전송. 본 작업/UI/반환값 절대 차단·변경 안 함.
             # 전체 try/except — 어떤 실패도 finalize_edits 에 영향 0 (telemetry only).
+            #
+            # ⚠️ 실유저 기본 OFF: in-app verify 는 (1) 전체 문서 렌더(수초~수분, 무거운
+            #   문서는 hang), (2) 비전 API + 이미지 업로드, (3) STA COM 객체를 백그라운드
+            #   스레드에서 접근(크래시/렉 위험) — 실유저 UX 를 해칠 수 있다. 동일 verify
+            #   데이터는 내부 eval 하네스(eval.auto_eval)가 R2 corpus(실유저 문서)로 수집
+            #   하므로, 실유저 기기에서 돌릴 필요가 없다. 내부(팀/베타) 머신에서만
+            #   환경변수 INSERTY_VERIFY_INAPP=1 로 켠다. 가벼운 trace(block_cmd 등)는
+            #   이 게이트와 무관하게 그대로 동작(아래 finally 의 flush).
+            import os as _os
+            _verify_inapp = _os.environ.get("INSERTY_VERIFY_INAPP", "").strip().lower() in (
+                "1", "true", "yes", "on",
+            )
             try:
-                if self._diff_mode_enabled and edits_count > 0:
+                if _verify_inapp and self._diff_mode_enabled and edits_count > 0:
                     from services.verification_service import run_verification
                     connector = self._ensure_connector()
                     verify_hwp = getattr(connector, "hwp", connector)
