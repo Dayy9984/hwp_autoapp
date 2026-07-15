@@ -156,7 +156,9 @@ pnpm build
 ## 🚀 개발 / Development
 
 ```bash
-pnpm dev    # Vite + Electron + Python 서브프로세스 동시 기동
+pnpm dev          # Vite + Electron + Python 서브프로세스 동시 기동 (소스 실행, 빌드 불필요)
+pnpm build:fast   # Python 재빌드 없이 인스톨러 (python/dist 재사용)
+pnpm build        # 전체 릴리스 빌드 (Python Nuitka + Electron 인스톨러)
 ```
 
 `.env` 파일 (선택):
@@ -164,9 +166,6 @@ pnpm dev    # Vite + Electron + Python 서브프로세스 동시 기동
 ```env
 # OpenAI API 모드를 쓸 경우 (선택)
 VITE_OPENAI_API_KEY=sk-proj-...
-
-# 자체 인스톨러 업데이트 피드 (선택)
-UPDATE_FEED_URL=https://inserty-release-worker.snsoffice.workers.dev/auto-update/
 ```
 
 > Codex 모드만 쓴다면 `VITE_OPENAI_API_KEY`는 비워둬도 됩니다. 앱 안의 설정 → AI에서 ChatGPT 계정으로 로그인하세요.
@@ -187,7 +186,7 @@ insertyai/
 ├── electron/                       # Electron 메인 + preload (TypeScript)
 │   ├── main/                       # IPC 핸들러, 창 관리, Python 브리지
 │   ├── preload/                    # contextBridge API
-│   └── services/                   # Python 통신, SQLite, 자동 업데이트
+│   └── services/                   # Python 통신, SQLite, HWP 바인딩
 │
 ├── src/                            # React 프론트엔드 (TypeScript)
 │   ├── components/                 # UI 컴포넌트 + 모달 + 팝오버
@@ -226,6 +225,7 @@ insertyai/
 │   ├── utils/                      # 로깅·HWPML 유틸
 │   └── tests/                      # pytest (131 tests)
 │
+├── mcp-server/                     # MCP 서버 (외부 클라이언트에 HWP 편집 도구 노출)
 ├── api문서/                         # 한컴 HWP API 레퍼런스 (Korean)
 ├── build/                          # 앱 아이콘, NSIS 인스톨러 스크립트
 ├── test/                           # vitest 프론트엔드 테스트

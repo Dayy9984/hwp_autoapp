@@ -100,3 +100,7 @@ eval-results/
 
 # Playwright MCP browser snapshots (scratch)
 .playwright-mcp/
+
+# Python bytecode (any dir)
+__pycache__/
+*.pyc
