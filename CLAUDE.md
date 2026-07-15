@@ -28,14 +28,26 @@ This file provides guidance to Claude Code when working with this repository.
 3. **RAG**: OpenAI Vector Stores + file_search API
 4. **Multi-Document**: Manage multiple open HWP windows simultaneously
 5. **Window Binding**: Auto-detect and bind to running HWP instances
+6. **MCP Server**: Expose HWP editing as MCP tools for external clients (see `mcp-server/`)
+
+> Open-source build: the commercial/beta subsystems (runtime license gate,
+> auto-update, telemetry, announcements, beta-trace upload) have been removed.
+> The AGPL-3.0 license itself is unchanged (commercial use still requires a
+> commercial license).
 
 ## Development Commands
 
 ```bash
-pnpm dev             # Start dev mode
-pnpm build           # Full build (Python Nuitka + Electron installer)
-pnpm build:python    # Python backend only
+pnpm dev             # Run the full app from source (Vite + Electron + Python via uv). No build step.
+pnpm build           # Full release build (Python Nuitka exes + Electron installer)
+pnpm build:python    # Python backend only (Nuitka)
+pnpm build:fast      # Skip Python rebuild — tsc + vite build + electron-builder (reuses python/dist)
+pnpm build:web       # Renderer + electron bundle only (tsc + vite build), no installer
 ```
+
+`pnpm dev` is the one-command dev server: HWP must be running with a document
+open; Electron spawns the Python backend from source with `uv run`, so no
+Python build is needed for development.
 
 ## Architecture
 
@@ -101,3 +113,5 @@ Use `id: 4` in commands, never `id: cell-4`.
 | `electron/main/index.ts` | Electron main process |
 | `electron/services/python-bridge.ts` | Python bridge |
 | `src/stores/document-store.ts` | Document state |
+| `python/processing/structure/enriched_hdml_serializer.py` | HDML markup serializer |
+| `mcp-server/` | MCP server exposing HWP editing tools to external clients |
