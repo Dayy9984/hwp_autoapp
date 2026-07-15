@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-CVD Child Process - CVD extraction/diff generation in isolated process.
+HDML Child Process - HDML extraction/diff generation in isolated process.
 
 Communicates with the main process via stdin/stdout JSON-RPC.
 Runs HWP COM work in a separate process to avoid interfering with editing COM.
@@ -12,12 +12,12 @@ import traceback
 from typing import Dict, Any
 
 from services.config import config
-from services.cvd_service import CVDService
+from services.hdml_service import HDMLService
 from services.diff_service import DiffService
 
 
-class CVDProcess:
-    """CVD Child Process - CVD extraction/diff worker"""
+class HDMLProcess:
+    """HDML Child Process - HDML extraction/diff worker"""
 
     def handle_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
         method = request.get("method")
@@ -28,11 +28,11 @@ class CVDProcess:
             if method == "ping":
                 return {"id": request_id, "result": {"pong": True}}
 
-            if method == "cvd:extractPair":
+            if method == "hdml:extractPair":
                 result = self._extract_pair(params)
                 return {"id": request_id, "result": result}
 
-            if method == "cvd:generateDiff":
+            if method == "hdml:generateDiff":
                 result = self._generate_diff(params)
                 return {"id": request_id, "result": result}
 
@@ -61,12 +61,12 @@ class CVDProcess:
         config.set_user_data_path(user_data_path)
 
         def log_callback(level: str, message: str):
-            print(f"[CVDService][{level}] {message}", file=sys.stderr)
+            print(f"[HDMLService][{level}] {message}", file=sys.stderr)
 
         def progress_callback(progress: float, message: str):
             event = {
                 "type": "progress",
-                "event": "cvd:progress",
+                "event": "hdml:progress",
                 "data": {
                     "pairId": pair_id,
                     "progress": int(progress * 100),
@@ -76,12 +76,12 @@ class CVDProcess:
             print(json.dumps(event, ensure_ascii=False))
             sys.stdout.flush()
 
-        cvd_service = CVDService(
+        hdml_service = HDMLService(
             log_callback=log_callback,
             allow_existing_instance=False,
         )
 
-        return cvd_service.extract_pair_cvd(
+        return hdml_service.extract_pair_hdml(
             project_id=project_id,
             pair_id=pair_id,
             template_path=template_path,
@@ -111,10 +111,10 @@ class CVDProcess:
             json_line = json.dumps(response, ensure_ascii=False)
             print(json_line, flush=True)
         except Exception as e:
-            print(f"[CVDProcess] Response send error: {e}", file=sys.stderr)
+            print(f"[HDMLProcess] Response send error: {e}", file=sys.stderr)
 
     def run(self):
-        print("[CVDProcess] Ready, waiting for requests...", file=sys.stderr)
+        print("[HDMLProcess] Ready, waiting for requests...", file=sys.stderr)
 
         for line in sys.stdin:
             line = line.strip()
@@ -124,14 +124,14 @@ class CVDProcess:
             try:
                 request = json.loads(line)
             except json.JSONDecodeError as e:
-                print(f"[CVDProcess] JSON decode error: {e}", file=sys.stderr)
+                print(f"[HDMLProcess] JSON decode error: {e}", file=sys.stderr)
                 continue
 
             response = self.handle_request(request)
             self._send_response(response)
 
             if request.get("method") == "quit":
-                print("[CVDProcess] Quitting...", file=sys.stderr)
+                print("[HDMLProcess] Quitting...", file=sys.stderr)
                 break
 
 
@@ -141,5 +141,5 @@ if __name__ == "__main__":
         sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8')
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
 
-    process = CVDProcess()
+    process = HDMLProcess()
     process.run()

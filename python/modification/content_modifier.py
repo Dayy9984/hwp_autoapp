@@ -687,7 +687,7 @@ class ContentModifier:
 
         coords = registry_ref.get_adjusted_position(extracted_id)
 
-        # Fallback: 셀 ID인 경우 첫 번째 자식 문단 ID 시도 (CVD 형식 호환성)
+        # Fallback: 셀 ID인 경우 첫 번째 자식 문단 ID 시도 (HDML 형식 호환성)
         if coords is None and extracted_id:
             try:
                 child_id = str(int(extracted_id) + 1)

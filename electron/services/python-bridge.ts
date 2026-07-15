@@ -373,7 +373,7 @@ export class PythonBridge extends EventEmitter {
         timeoutMs = 60000
       } else if (method === 'prepare_context') {
         timeoutMs = 120000
-      } else if (method.startsWith('cvd:') || method.includes('cvd')) {
+      } else if (method.startsWith('hdml:') || method.includes('hdml')) {
         timeoutMs = 0  // 사용자 권한 승인 대기 시 브리지 강제 복구 방지 (무제한)
       } else if (method === 'readHwpFile') {
         timeoutMs = 0  // HWPX 보안 팝업 대기 시 브리지 강제 복구 방지 (무제한)
@@ -478,7 +478,7 @@ export function getPythonBridge(appRoot: string): PythonBridge {
   return bridgeInstance
 }
 
-// FileReaderBridge - 파일 읽기/CVD 추출 전용 (메인 프로세스 blocking 방지)
+// FileReaderBridge - 파일 읽기/HDML 추출 전용 (메인 프로세스 blocking 방지)
 let fileReaderInstance: PythonBridge | null = null
 
 export function getFileReaderBridge(appRoot: string): PythonBridge {

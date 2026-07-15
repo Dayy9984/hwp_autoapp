@@ -316,7 +316,7 @@ class MarkupConverter:
             return None
 
     def extract_from_hwpml_file(self, markup_path: Path) -> Optional[MarkupConversionResult]:
-        """HWPML 파일에서 HTML 추출 (cvd_service.py, main.py 호환용)
+        """HWPML 파일에서 HTML 추출 (hdml_service.py, main.py 호환용)
 
         Args:
             markup_path: HWPML 파일 경로

@@ -80,7 +80,7 @@ documents: { select: (type, index) => ipcRenderer.invoke('documents:select', { t
 ipcMain.handle('documents:select', async (_, args) => pythonBridge.call('documents:select', args))
 ```
 
-## CVD Format
+## HDML Format
 
 HTML-like markup representing HWP document structure. IDs must be bare integers:
 

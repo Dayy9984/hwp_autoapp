@@ -25,7 +25,7 @@ export type ErrorCode =
 
     // Python 관련
     | 'PYTHON_NOT_RUNNING'
-    | 'CVD_EXTRACTION_FAILED'
+    | 'HDML_EXTRACTION_FAILED'
     | 'OCR_FAILED'
     | 'OCR_NOT_AVAILABLE'
 

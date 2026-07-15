@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 Diff Service
-Template과 Filled CVD 비교 서비스
+Template과 Filled HDML 비교 서비스
 
-CVD 포맷 (HTML-like):
+HDML 포맷 (HTML-like):
 - <td ID [colspan="N"] [rowspan="N"]><PARA_ID>텍스트</td>
 - <ID>텍스트  (독립 paragraph)
 - <textbox ID><PARA_ID>텍스트
@@ -18,15 +18,15 @@ from typing import Dict, List, Any, Optional, Tuple
 from .config import config
 
 
-class CVDParser:
-    """CVD HTML-like 포맷 파서
+class HDMLParser:
+    """HDML HTML-like 포맷 파서
 
     지원 포맷:
     1. document_extractor.py 생성 포맷:
        - <td id="cell-N"> ... </td>
        - <p id="para-N">text</p>
 
-    2. 레거시 CVD 포맷:
+    2. 레거시 HDML 포맷:
        - <td N><PARA_ID>text</td>
        - <N>text
     """
@@ -48,7 +48,7 @@ class CVDParser:
         re.IGNORECASE
     )
 
-    # 정규표현식 패턴 - 레거시 CVD 포맷
+    # 정규표현식 패턴 - 레거시 HDML 포맷
     # <td ID [attrs]> 또는 <td ID attrs>
     TD_PATTERN = re.compile(
         r'<td\s+(\d+)(?:\s+[^>]*)?>',
@@ -72,12 +72,12 @@ class CVDParser:
         re.DOTALL | re.IGNORECASE
     )
 
-    def parse(self, cvd_text: str) -> List[Dict[str, Any]]:
+    def parse(self, hdml_text: str) -> List[Dict[str, Any]]:
         """
-        CVD 텍스트를 파싱하여 블록 리스트 반환
+        HDML 텍스트를 파싱하여 블록 리스트 반환
 
         Args:
-            cvd_text: CVD 파일 내용
+            hdml_text: HDML 파일 내용
 
         Returns:
             List[Dict]: [
@@ -92,12 +92,12 @@ class CVDParser:
             ]
         """
         # 포맷 자동 감지
-        if 'id="cell-' in cvd_text or 'id="para-' in cvd_text:
-            return self._parse_extractor_format(cvd_text)
+        if 'id="cell-' in hdml_text or 'id="para-' in hdml_text:
+            return self._parse_extractor_format(hdml_text)
         else:
-            return self._parse_legacy_format(cvd_text)
+            return self._parse_legacy_format(hdml_text)
 
-    def _parse_extractor_format(self, cvd_text: str) -> List[Dict[str, Any]]:
+    def _parse_extractor_format(self, hdml_text: str) -> List[Dict[str, Any]]:
         """
         document_extractor.py 생성 포맷 파싱
         - <td id="cell-N" [attrs]> ... </td>
@@ -108,8 +108,8 @@ class CVDParser:
         para_counter = 10000  # id 없는 p 태그용 카운터
 
         # main_content 섹션 추출
-        main_match = self.MAIN_CONTENT_PATTERN.search(cvd_text)
-        content = main_match.group(1) if main_match else cvd_text
+        main_match = self.MAIN_CONTENT_PATTERN.search(hdml_text)
+        content = main_match.group(1) if main_match else hdml_text
 
         # 라인별 파싱
         current_td_id = None
@@ -257,17 +257,17 @@ class CVDParser:
 
         return blocks
 
-    def _parse_legacy_format(self, cvd_text: str) -> List[Dict[str, Any]]:
+    def _parse_legacy_format(self, hdml_text: str) -> List[Dict[str, Any]]:
         """
-        레거시 CVD 포맷 파싱
+        레거시 HDML 포맷 파싱
         - <td N><PARA_ID>text</td>
         - <N>text
         """
         blocks = []
 
         # main_content 섹션 추출
-        main_match = self.MAIN_CONTENT_PATTERN.search(cvd_text)
-        content = main_match.group(1) if main_match else cvd_text
+        main_match = self.MAIN_CONTENT_PATTERN.search(hdml_text)
+        content = main_match.group(1) if main_match else hdml_text
 
         # 라인별 파싱
         current_td_id = None
@@ -432,9 +432,9 @@ class CVDParser:
 class DiffService:
     """Diff 생성 서비스 (위치 기반 매칭)"""
 
-    def _extract_table_cells(self, cvd_text: str) -> List[Dict]:
+    def _extract_table_cells(self, hdml_text: str) -> List[Dict]:
         """
-        CVD에서 표 셀 추출 (위치 기반)
+        HDML에서 표 셀 추출 (위치 기반)
 
         Returns:
             List[Dict]: [{
@@ -451,7 +451,7 @@ class DiffService:
                 'height': Optional[int]
             }, ...]
         """
-        tables = re.findall(r'<table>(.*?)</table>', cvd_text, re.DOTALL | re.IGNORECASE)
+        tables = re.findall(r'<table>(.*?)</table>', hdml_text, re.DOTALL | re.IGNORECASE)
 
         all_cells = []
 
@@ -511,8 +511,8 @@ class DiffService:
 
     def generate_diff_v2_position_based(
         self,
-        template_cvd_path: str,
-        filled_cvd_path: str,
+        template_hdml_path: str,
+        filled_hdml_path: str,
         output_path: str,
         pair_id: str
     ) -> Dict[str, Any]:
@@ -523,24 +523,24 @@ class DiffService:
         paragraph ID 불일치 문제 해결
 
         Args:
-            template_cvd_path: 템플릿 CVD 경로
-            filled_cvd_path: 작성본 CVD 경로
+            template_hdml_path: 템플릿 HDML 경로
+            filled_hdml_path: 작성본 HDML 경로
             output_path: diff.json 출력 경로
             pair_id: Pair ID
 
         Returns:
             DiffResult 객체
         """
-        # 1. CVD 로드
-        with open(template_cvd_path, 'r', encoding='utf-8') as f:
-            template_cvd_text = f.read()
+        # 1. HDML 로드
+        with open(template_hdml_path, 'r', encoding='utf-8') as f:
+            template_hdml_text = f.read()
 
-        with open(filled_cvd_path, 'r', encoding='utf-8') as f:
-            filled_cvd_text = f.read()
+        with open(filled_hdml_path, 'r', encoding='utf-8') as f:
+            filled_hdml_text = f.read()
 
         # 2. 표 셀 추출 (위치 기반)
-        template_cells = self._extract_table_cells(template_cvd_text)
-        filled_cells = self._extract_table_cells(filled_cvd_text)
+        template_cells = self._extract_table_cells(template_hdml_text)
+        filled_cells = self._extract_table_cells(filled_hdml_text)
 
         # 3. 위치 기반 매칭 및 변경 탐지
         changes = []
@@ -601,8 +601,8 @@ class DiffService:
             'version': '2.0',
             'algorithm': 'position_based',
             'pairId': pair_id,
-            'templateCvdPath': template_cvd_path,
-            'filledCvdPath': filled_cvd_path,
+            'templateHdmlPath': template_hdml_path,
+            'filledHdmlPath': filled_hdml_path,
             'createdAt': int(datetime.now().timestamp() * 1000),
             'changes': changes,
             'stats': {
@@ -624,8 +624,8 @@ class DiffService:
 
     def generate_diff(
         self,
-        template_cvd_path: str,
-        filled_cvd_path: str,
+        template_hdml_path: str,
+        filled_hdml_path: str,
         output_path: str,
         pair_id: str
     ) -> Dict[str, Any]:
@@ -636,8 +636,8 @@ class DiffService:
         기존 ID 기반 방식의 문제(ID 이동, paragraph 추가) 해결
 
         Args:
-            template_cvd_path: 템플릿 CVD 경로
-            filled_cvd_path: 작성본 CVD 경로
+            template_hdml_path: 템플릿 HDML 경로
+            filled_hdml_path: 작성본 HDML 경로
             output_path: diff.json 출력 경로
             pair_id: Pair ID
 
@@ -646,8 +646,8 @@ class DiffService:
         """
         # v2 메서드 호출
         return self.generate_diff_v2_position_based(
-            template_cvd_path,
-            filled_cvd_path,
+            template_hdml_path,
+            filled_hdml_path,
             output_path,
             pair_id
         )
@@ -675,27 +675,27 @@ class DiffService:
         try:
             pair_path = config.get_template_pair_path(project_id, pair_id)
 
-            template_cvd_path = os.path.join(pair_path, "template.cvd.md")
-            filled_cvd_path = os.path.join(pair_path, "filled.cvd.md")
+            template_hdml_path = os.path.join(pair_path, "template.hdml.md")
+            filled_hdml_path = os.path.join(pair_path, "filled.hdml.md")
             output_path = os.path.join(pair_path, "diff.json")
 
-            # CVD 존재 확인
-            if not os.path.exists(template_cvd_path):
+            # HDML 존재 확인
+            if not os.path.exists(template_hdml_path):
                 return {
                     "success": False,
-                    "error": f"Template CVD not found: {template_cvd_path}"
+                    "error": f"Template HDML not found: {template_hdml_path}"
                 }
 
-            if not os.path.exists(filled_cvd_path):
+            if not os.path.exists(filled_hdml_path):
                 return {
                     "success": False,
-                    "error": f"Filled CVD not found: {filled_cvd_path}"
+                    "error": f"Filled HDML not found: {filled_hdml_path}"
                 }
 
             # Diff 생성
             diff_result = self.generate_diff(
-                template_cvd_path,
-                filled_cvd_path,
+                template_hdml_path,
+                filled_hdml_path,
                 output_path,
                 pair_id
             )

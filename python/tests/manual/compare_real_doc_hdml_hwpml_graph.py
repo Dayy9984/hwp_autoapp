@@ -15,18 +15,18 @@ if ROOT not in sys.path:
 
 
 from engine.connection.security_module import activate_security_module
-from processing.extraction.cvd_extractor import CVDExtractor
+from processing.extraction.hdml_extractor import HDMLExtractor
 from processing.extraction.hwp_raw_wrapper import HwpRawWrapper
 from processing.structure.hwpml_direct_graph_builder import build_document_graph_from_hwpml
 from processing.structure.hwpml_direct_graph_builder import extract_raw_hwpml_nodes
 from processing.structure.hwpml_runtime_registry_builder import build_segment_registry_from_extractor
-from processing.structure.enriched_cvd_serializer import serialize_enriched_cvd
+from processing.structure.enriched_hdml_serializer import serialize_enriched_hdml
 from processing.structure.segment_registry import SegmentRegistry
 
 
 _ATTR_RE = re.compile(r'([a-zA-Z_:-]+)="([^"]*)"')
-_CVD_TD_TAG_RE = re.compile(r"<td\b([^>]*)>", flags=re.IGNORECASE)
-_CVD_P_TAG_RE = re.compile(r"<p\b([^>]*)>", flags=re.IGNORECASE)
+_HDML_TD_TAG_RE = re.compile(r"<td\b([^>]*)>", flags=re.IGNORECASE)
+_HDML_P_TAG_RE = re.compile(r"<p\b([^>]*)>", flags=re.IGNORECASE)
 
 
 def _safe_int(value: Any) -> Optional[int]:
@@ -111,13 +111,13 @@ def _normalize_pos_to_page(raw_map: Dict[Any, Any]) -> Dict[Tuple[int, int, int]
     return out
 
 
-def _extract_cvd_td_entries(
-    cvd_text: str,
+def _extract_hdml_td_entries(
+    hdml_text: str,
     id_to_pos: Dict[int, Tuple[int, int, int]],
     pos_to_page: Dict[Tuple[int, int, int], int],
 ) -> List[Dict[str, Any]]:
     entries: List[Dict[str, Any]] = []
-    for match in _CVD_TD_TAG_RE.finditer(cvd_text or ""):
+    for match in _HDML_TD_TAG_RE.finditer(hdml_text or ""):
         attrs = _parse_attrs(match.group(1))
         sid = _safe_int(attrs.get("id"))
         pos = id_to_pos.get(sid) if sid is not None else None
@@ -162,8 +162,8 @@ def _extract_cvd_td_entries(
     return entries
 
 
-def _extract_cvd_p_count(cvd_text: str) -> int:
-    return len(_CVD_P_TAG_RE.findall(cvd_text or ""))
+def _extract_hdml_p_count(hdml_text: str) -> int:
+    return len(_HDML_P_TAG_RE.findall(hdml_text or ""))
 
 
 def _iter_elements_by_local_name(root: ET.Element, name: str) -> Iterable[ET.Element]:
@@ -218,7 +218,7 @@ def _extract_page_range_hwpml_saveblock(
 ) -> str:
     raw = getattr(pyhwpx_hwp, "hwp", pyhwpx_hwp)
     wrapper = HwpRawWrapper(raw)
-    extractor = CVDExtractor(wrapper)
+    extractor = HDMLExtractor(wrapper)
 
     start_pos = extractor._move_to_page_start(wrapper, int(start_page))
     if not start_pos:
@@ -297,22 +297,22 @@ def _normalize_hwpml_td_entries(raw_td_nodes: List[Dict[str, Any]]) -> List[Dict
     return entries
 
 
-def _rekey_graph_entries_by_cvd_sig(
-    cvd_td_entries: List[Dict[str, Any]],
+def _rekey_graph_entries_by_hdml_sig(
+    hdml_td_entries: List[Dict[str, Any]],
     graph_td_entries: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    sig_to_cvd_id: Dict[str, int] = {}
-    for entry in cvd_td_entries or []:
+    sig_to_hdml_id: Dict[str, int] = {}
+    for entry in hdml_td_entries or []:
         sig = entry.get("td_sig_v1")
         sid = _safe_int(entry.get("id"))
-        if sig and sid is not None and sig not in sig_to_cvd_id:
-            sig_to_cvd_id[str(sig)] = sid
+        if sig and sid is not None and sig not in sig_to_hdml_id:
+            sig_to_hdml_id[str(sig)] = sid
 
     rekeyed: List[Dict[str, Any]] = []
     for entry in graph_td_entries or []:
         copied = dict(entry)
         sig = copied.get("td_sig_v1")
-        mapped_id = sig_to_cvd_id.get(str(sig)) if sig else None
+        mapped_id = sig_to_hdml_id.get(str(sig)) if sig else None
         if mapped_id is not None:
             copied["id"] = mapped_id
         rekeyed.append(copied)
@@ -343,19 +343,19 @@ def _is_empty(value: Any) -> bool:
     return False
 
 
-def _compare_cvd_vs_graph(
-    cvd_td_entries: List[Dict[str, Any]],
+def _compare_hdml_vs_graph(
+    hdml_td_entries: List[Dict[str, Any]],
     graph_td_entries: List[Dict[str, Any]],
     start_page: int,
     end_page: int,
 ) -> Dict[str, Any]:
-    cvd_by_id = {e["id"]: e for e in cvd_td_entries if e.get("id") is not None}
+    hdml_by_id = {e["id"]: e for e in hdml_td_entries if e.get("id") is not None}
     graph_by_id = {e["id"]: e for e in graph_td_entries if e.get("id") is not None}
-    common_ids = sorted(set(cvd_by_id.keys()) & set(graph_by_id.keys()))
+    common_ids = sorted(set(hdml_by_id.keys()) & set(graph_by_id.keys()))
 
-    cvd_by_sig = {e["td_sig_v1"]: e for e in cvd_td_entries if e.get("td_sig_v1")}
+    hdml_by_sig = {e["td_sig_v1"]: e for e in hdml_td_entries if e.get("td_sig_v1")}
     graph_by_sig = {e["td_sig_v1"]: e for e in graph_td_entries if e.get("td_sig_v1")}
-    common_sigs = sorted(set(cvd_by_sig.keys()) & set(graph_by_sig.keys()))
+    common_sigs = sorted(set(hdml_by_sig.keys()) & set(graph_by_sig.keys()))
 
     field_match_counts = {
         "td_sig_v1": 0,
@@ -389,28 +389,28 @@ def _compare_cvd_vs_graph(
     mismatches: List[Dict[str, Any]] = []
 
     for sid in common_ids:
-        cvd = cvd_by_id[sid]
+        hdml = hdml_by_id[sid]
         graph = graph_by_id[sid]
         mismatch: Dict[str, Any] = {"id": sid, "fields": {}}
-        present_map = cvd.get("_present") if isinstance(cvd.get("_present"), dict) else {}
+        present_map = hdml.get("_present") if isinstance(hdml.get("_present"), dict) else {}
 
         for field in field_match_counts.keys():
-            cvd_value = cvd.get(field)
+            hdml_value = hdml.get(field)
             graph_value = graph.get(field)
-            cvd_present = bool(present_map.get(field, False))
+            hdml_present = bool(present_map.get(field, False))
 
-            if cvd_value == graph_value:
+            if hdml_value == graph_value:
                 field_match_counts[field] += 1
-            elif field not in style_fields or cvd_present or not _is_empty(cvd_value):
+            elif field not in style_fields or hdml_present or not _is_empty(hdml_value):
                 mismatch["fields"][field] = {
-                    "cvd": cvd_value,
+                    "hdml": hdml_value,
                     "graph": graph_value,
                 }
 
             if field in style_fields:
-                if cvd_present:
+                if hdml_present:
                     field_nonnull_denominators[field] += 1
-                    if cvd_value == graph_value:
+                    if hdml_value == graph_value:
                         field_nonnull_match_counts[field] += 1
                 else:
                     field_enrichment_denominators[field] += 1
@@ -421,7 +421,7 @@ def _compare_cvd_vs_graph(
                         field_enrichment_counts[field] += 1
             else:
                 field_nonnull_denominators[field] += 1
-                if cvd_value == graph_value:
+                if hdml_value == graph_value:
                     field_nonnull_match_counts[field] += 1
 
         if mismatch["fields"]:
@@ -433,8 +433,8 @@ def _compare_cvd_vs_graph(
     ]
 
     ratios = {
-        "id_coverage": _ratio(len(common_ids), len(cvd_by_id)),
-        "td_sig_coverage": _ratio(len(common_sigs), len(cvd_by_sig)),
+        "id_coverage": _ratio(len(common_ids), len(hdml_by_id)),
+        "td_sig_coverage": _ratio(len(common_sigs), len(hdml_by_sig)),
         "td_sig_match_ratio": _ratio(field_match_counts["td_sig_v1"], len(common_ids)),
         "row_match_ratio": _ratio(field_match_counts["row"], len(common_ids)),
         "col_match_ratio": _ratio(field_match_counts["col"], len(common_ids)),
@@ -534,10 +534,10 @@ def _compare_cvd_vs_graph(
 
     return {
         "counts": {
-            "cvd_td_ids": len(cvd_by_id),
+            "hdml_td_ids": len(hdml_by_id),
             "graph_td_ids": len(graph_by_id),
             "common_ids": len(common_ids),
-            "cvd_td_sigs": len(cvd_by_sig),
+            "hdml_td_sigs": len(hdml_by_sig),
             "graph_td_sigs": len(graph_by_sig),
             "common_sigs": len(common_sigs),
             "graph_td_in_range": len(graph_in_range),
@@ -674,7 +674,7 @@ def run_real_doc_compare(
         return {"success": False, "error": f"file not found: {file_path}"}
 
     source = str(registry_source or "runtime").strip().lower()
-    if source not in {"runtime", "cvd"}:
+    if source not in {"runtime", "hdml"}:
         source = "runtime"
 
     hwp = None
@@ -691,8 +691,8 @@ def run_real_doc_compare(
         if open_result is False:
             return {"success": False, "error": "hwp.open returned False"}
 
-        extractor = CVDExtractor(hwp)
-        extracted = extractor.extract_cvd(
+        extractor = HDMLExtractor(hwp)
+        extracted = extractor.extract_hdml(
             {
                 "start": int(start_page),
                 "end": int(end_page),
@@ -700,9 +700,9 @@ def run_real_doc_compare(
             }
         )
         if not extracted:
-            return {"success": False, "error": "extract_cvd returned None"}
+            return {"success": False, "error": "extract_hdml returned None"}
 
-        cvd_text, id_to_pos_raw = extracted
+        hdml_text, id_to_pos_raw = extracted
         id_to_pos = _normalize_id_to_pos(id_to_pos_raw)
         pos_to_page = _normalize_pos_to_page(getattr(extractor, "pos_to_page", {}) or {})
 
@@ -710,7 +710,7 @@ def run_real_doc_compare(
             registry, id_to_pos_runtime = build_segment_registry_from_extractor(extractor)
             runtime_id_count = len(id_to_pos_runtime or {})
         else:
-            registry = SegmentRegistry((cvd_text, id_to_pos_raw))
+            registry = SegmentRegistry((hdml_text, id_to_pos_raw))
             runtime_id_count = len(id_to_pos_raw or {})
         hwpml_full = ""
         hwpml_page_range = ""
@@ -733,25 +733,25 @@ def run_real_doc_compare(
             page_range=(int(start_page), int(end_page)),
             page_by_pos=pos_to_page or None,
         )
-        graph_json = serialize_enriched_cvd(
+        graph_json = serialize_enriched_hdml(
             graph,
             page_range=(int(start_page), int(end_page)),
         )
 
-        cvd_td_entries = _extract_cvd_td_entries(cvd_text, id_to_pos, pos_to_page)
+        hdml_td_entries = _extract_hdml_td_entries(hdml_text, id_to_pos, pos_to_page)
         hwpml_raw_nodes = extract_raw_hwpml_nodes(hwpml_for_graph)
         hwpml_td_entries = _normalize_hwpml_td_entries(list((hwpml_raw_nodes or {}).get("td") or []))
         graph_td_entries = _normalize_graph_td_entries(graph)
         graph_nodes = list(graph.get("nodes") or [])
         graph_types = Counter(str(node.get("block_type") or "unknown") for node in graph_nodes)
-        graph_td_entries_for_cvd_compare = _rekey_graph_entries_by_cvd_sig(
-            cvd_td_entries=cvd_td_entries,
+        graph_td_entries_for_hdml_compare = _rekey_graph_entries_by_hdml_sig(
+            hdml_td_entries=hdml_td_entries,
             graph_td_entries=graph_td_entries,
         )
 
-        comparison = _compare_cvd_vs_graph(
-            cvd_td_entries=cvd_td_entries,
-            graph_td_entries=graph_td_entries_for_cvd_compare,
+        comparison = _compare_hdml_vs_graph(
+            hdml_td_entries=hdml_td_entries,
+            graph_td_entries=graph_td_entries_for_hdml_compare,
             start_page=int(start_page),
             end_page=int(end_page),
         )
@@ -769,16 +769,16 @@ def run_real_doc_compare(
             "registry_id_count": runtime_id_count,
             "security_module_id": module_id,
             "security_module_dll": dll_path,
-            "cvd": {
-                "length": len(cvd_text or ""),
+            "hdml": {
+                "length": len(hdml_text or ""),
                 "id_count": len(id_to_pos),
-                "paragraph_count": _extract_cvd_p_count(cvd_text),
-                "td_count": len(cvd_td_entries),
-                "td_sig_count": sum(1 for e in cvd_td_entries if e.get("td_sig_v1")),
-                "td_page_hist": _histogram(e.get("page") for e in cvd_td_entries),
-                "td_bgcolor_count": sum(1 for e in cvd_td_entries if e.get("bgcolor")),
-                "td_text_color_count": sum(1 for e in cvd_td_entries if e.get("text_color")),
-                "td_diagonal_count": sum(1 for e in cvd_td_entries if e.get("diagonal")),
+                "paragraph_count": _extract_hdml_p_count(hdml_text),
+                "td_count": len(hdml_td_entries),
+                "td_sig_count": sum(1 for e in hdml_td_entries if e.get("td_sig_v1")),
+                "td_page_hist": _histogram(e.get("page") for e in hdml_td_entries),
+                "td_bgcolor_count": sum(1 for e in hdml_td_entries if e.get("bgcolor")),
+                "td_text_color_count": sum(1 for e in hdml_td_entries if e.get("text_color")),
+                "td_diagonal_count": sum(1 for e in hdml_td_entries if e.get("diagonal")),
             },
             "hwpml": {
                 "full": _extract_hwpml_summary(hwpml_full),
@@ -831,7 +831,7 @@ def run_real_doc_compare(
         diag = report["diagnosis"]
         ratios = comparison.get("ratios") or {}
         if ratios.get("id_coverage", 1.0) < 1.0:
-            diag.append("CVD TD ID 대비 Graph TD ID 커버리지가 100%가 아닙니다.")
+            diag.append("HDML TD ID 대비 Graph TD ID 커버리지가 100%가 아닙니다.")
         if ratios.get("table_path_match_ratio", 1.0) < 1.0:
             diag.append("table_path 불일치가 존재합니다. table_path 우선순위/매핑 확인이 필요합니다.")
         if ratios.get("graph_page_in_range_ratio", 1.0) < 1.0:
@@ -873,7 +873,7 @@ def run_real_doc_compare(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Compare CVD/HWPML/DocumentGraph completeness for a real .hwp file."
+        description="Compare HDML/HWPML/DocumentGraph completeness for a real .hwp file."
     )
     parser.add_argument("--file", required=True, help="absolute path to target .hwp file")
     parser.add_argument("--start-page", type=int, default=2)
@@ -881,8 +881,8 @@ def main() -> int:
     parser.add_argument(
         "--registry-source",
         default="runtime",
-        choices=["runtime", "cvd"],
-        help="registry source for graph build: runtime(extractor-based) or cvd(text-parse-based)",
+        choices=["runtime", "hdml"],
+        help="registry source for graph build: runtime(extractor-based) or hdml(text-parse-based)",
     )
     parser.add_argument("--out", default="", help="optional json output path")
     args = parser.parse_args()

@@ -27,11 +27,11 @@ const DANGEROUS_KEYWORDS = [
   '도구 호출', 'tool call', 'function call',
 
   // === 내부 구현 ===
-  'cvd', 'filledvalue', 'templatevalue', 'positionkey',
+  'hdml', 'filledvalue', 'templatevalue', 'positionkey',
   '블록id', '셀id', 'block_id', 'cell_id',
 
   // === 컨텍스트 태그 ===
-  '<user_request>', '<document_html>', '<document_cvd>',
+  '<user_request>', '<document_html>', '<document_hdml>',
   '<available_files>', '<matched_template_pair>',
   '<security_policy>', '<user_writing_preferences>',
 

@@ -137,8 +137,8 @@ class SegmentRegistry:
         self._list_pos_to_table_group_id: Dict[int, int] = {}
         self._table_group_id_to_rep_pos: Dict[int, Tuple[int, int, int]] = {}
 
-        # Bootstrap registry from CVD markup
-        self.initialize_from_cvd(markup_data, spatial_map)
+        # Bootstrap registry from HDML markup
+        self.initialize_from_hdml(markup_data, spatial_map)
 
     @classmethod
     def from_segments(
@@ -146,7 +146,7 @@ class SegmentRegistry:
         segments: Dict[str, ContentSegment],
         log_to_main: Callable[[str, Optional[str]], None] = None,
     ) -> "SegmentRegistry":
-        """Build a registry directly from prepared segments (CVD text not required)."""
+        """Build a registry directly from prepared segments (HDML text not required)."""
         instance = cls.__new__(cls)
         instance.log_to_main = log_to_main or (lambda msg, lvl: None)
 
@@ -197,19 +197,19 @@ class SegmentRegistry:
             if inherited_group is not None:
                 elem.table_group_id = inherited_group
 
-    def initialize_from_cvd(self, cvd: str, id_to_pos: Dict):
-        """Bootstrap registry from CVD markup and spatial map"""
+    def initialize_from_hdml(self, hdml: str, id_to_pos: Dict):
+        """Bootstrap registry from HDML markup and spatial map"""
         # Phase 1: Normalize position dictionary
         pos_map = self._normalize_pos_dict(id_to_pos)
 
         # Phase 2: Extract table topology first (order reversal!)
-        table_topology = self._build_table_topology(cvd)
+        table_topology = self._build_table_topology(hdml)
 
         # Phase 3: Build segments via dispatch pattern
-        self._dispatch_segment_creation(cvd, pos_map)
+        self._dispatch_segment_creation(hdml, pos_map)
 
         # Phase 4: Supplement missing ID tokens
-        self._supplement_orphan_ids(cvd, pos_map)
+        self._supplement_orphan_ids(hdml, pos_map)
 
         # Phase 5: Apply table group assignments
         self._apply_table_groups(table_topology)
@@ -222,8 +222,8 @@ class SegmentRegistry:
             normalized[str_key] = coordinates
         return normalized
 
-    def _build_table_topology(self, cvd: str) -> Dict[str, Dict[str, Any]]:
-        """Extract table structure topology from CVD markup"""
+    def _build_table_topology(self, hdml: str) -> Dict[str, Dict[str, Any]]:
+        """Extract table structure topology from HDML markup"""
         cell_to_group: Dict[str, Dict[str, Any]] = {}
         current_group_id = 0
         table_depth = 0
@@ -232,7 +232,7 @@ class SegmentRegistry:
         table_start_pattern = r"<table[^>]*>"
         cell_id_pattern = r'<td[^>]*\bid="([0-9]+)"'
 
-        for line in cvd.split("\n"):
+        for line in hdml.split("\n"):
             start_count = len(re.findall(table_start_pattern, line))
             end_count = line.count("</table>")
 
@@ -267,7 +267,7 @@ class SegmentRegistry:
             attrs[key] = value
         return attrs
 
-    def _dispatch_segment_creation(self, cvd: str, pos_map: Dict):
+    def _dispatch_segment_creation(self, hdml: str, pos_map: Dict):
         """Orchestrate segment extraction via strategy dispatch"""
         # Dispatch strategy pipeline for different element types
         extraction_pipeline = [
@@ -279,13 +279,13 @@ class SegmentRegistry:
         ]
 
         for strategy_name, extractor_func in extraction_pipeline:
-            extractor_func(cvd, pos_map)
+            extractor_func(hdml, pos_map)
 
-    def _extract_text_elements(self, cvd: str, pos_map: Dict):
+    def _extract_text_elements(self, hdml: str, pos_map: Dict):
         """Extract plain text elements via pattern matching"""
         pattern = r'(<p id="([0-9]+)"[^>]*>)([^<]*)</p>'
 
-        for line in cvd.split("\n"):
+        for line in hdml.split("\n"):
             match_result = re.search(pattern, line)
             if match_result is None:
                 continue
@@ -312,11 +312,11 @@ class SegmentRegistry:
             )
             self.segments[elem_identifier] = elem
 
-    def _extract_list_elements(self, cvd: str, pos_map: Dict):
+    def _extract_list_elements(self, hdml: str, pos_map: Dict):
         """Extract bulleted/numbered list elements"""
         pattern = r'<list[^>]*>\s*(<p id="([0-9]+)"[^>]*>)([^<]*)</p>'
 
-        for line in cvd.split("\n"):
+        for line in hdml.split("\n"):
             match_result = re.search(pattern, line)
             if match_result is None:
                 continue
@@ -352,11 +352,11 @@ class SegmentRegistry:
                 if tag_attrs:
                     existing_elem.attrs.update(tag_attrs)
 
-    def _extract_cell_elements(self, cvd: str, pos_map: Dict):
+    def _extract_cell_elements(self, hdml: str, pos_map: Dict):
         """Extract table cell container elements"""
         pattern = r'(<td[^>]*\bid="([0-9]+)"[^>]*>)'
 
-        for line in cvd.split("\n"):
+        for line in hdml.split("\n"):
             for match_result in re.finditer(pattern, line):
                 opening_tag = match_result.group(1)
                 cell_identifier = match_result.group(2)
@@ -379,11 +379,11 @@ class SegmentRegistry:
                 )
                 self.segments[cell_identifier] = cell_elem
 
-    def _extract_textbox_elements(self, cvd: str, pos_map: Dict):
+    def _extract_textbox_elements(self, hdml: str, pos_map: Dict):
         """Extract textbox container elements"""
         pattern = r'<textbox id="([0-9]+)"[^>]*>'
 
-        for line in cvd.split("\n"):
+        for line in hdml.split("\n"):
             match_result = re.search(pattern, line)
             if match_result is None:
                 continue
@@ -408,11 +408,11 @@ class SegmentRegistry:
                 )
                 self.segments[box_identifier] = box_elem
 
-    def _extract_annotation_pairs(self, cvd: str, pos_map: Dict):
+    def _extract_annotation_pairs(self, hdml: str, pos_map: Dict):
         """Extract footnote anchor/content element pairs"""
         pattern = r"^<각주([0-9]+)\s+([0-9]+)><([0-9]+)>\s*(.*)"
 
-        for line in cvd.split("\n"):
+        for line in hdml.split("\n"):
             match_result = re.match(pattern, line)
             if match_result is None:
                 continue
@@ -460,11 +460,11 @@ class SegmentRegistry:
             self.annotation_anchors[anchor_id] = registry_key
             self.annotation_contents[content_id] = registry_key
 
-    def _supplement_orphan_ids(self, cvd: str, pos_map: Dict):
+    def _supplement_orphan_ids(self, hdml: str, pos_map: Dict):
         """Collect and register unmatched ID tokens"""
         try:
-            # Scan entire CVD for ID attributes
-            discovered_ids = set(re.findall(r'id="([0-9]+)"', cvd))
+            # Scan entire HDML for ID attributes
+            discovered_ids = set(re.findall(r'id="([0-9]+)"', hdml))
 
             # Register orphans as text elements
             for discovered_id in discovered_ids:

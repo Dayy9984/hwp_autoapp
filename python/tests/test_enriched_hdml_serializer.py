@@ -1,4 +1,4 @@
-"""Unit tests for enriched_cvd_serializer.py."""
+"""Unit tests for enriched_hdml_serializer.py."""
 
 import sys
 import os
@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from processing.structure.enriched_cvd_serializer import serialize_enriched_cvd
+from processing.structure.enriched_hdml_serializer import serialize_enriched_hdml
 
 
 # ---------------------------------------------------------------------------
@@ -65,20 +65,20 @@ def _make_td(
 
 class TestEmptyGraph:
     def test_empty_dict(self):
-        result = serialize_enriched_cvd({})
+        result = serialize_enriched_hdml({})
         assert "<main_content>" in result
         assert "</main_content>" in result
 
     def test_empty_nodes(self):
-        result = serialize_enriched_cvd({"nodes": [], "edges": []})
+        result = serialize_enriched_hdml({"nodes": [], "edges": []})
         assert "<main_content>" in result
 
     def test_page_range_header(self):
-        result = serialize_enriched_cvd({}, page_range=(1, 3))
+        result = serialize_enriched_hdml({}, page_range=(1, 3))
         assert "<scanned_page_range>1 ~ 3 페이지</scanned_page_range>" in result
 
     def test_single_page_range(self):
-        result = serialize_enriched_cvd({}, page_range=(2, 2))
+        result = serialize_enriched_hdml({}, page_range=(2, 2))
         assert "2 페이지" in result
         assert "~" not in result
 
@@ -93,7 +93,7 @@ class TestTextOnly:
             "nodes": [_make_node("uid1", 1, full_text="Hello World")],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert '<p id="1">Hello World</p>' in result
 
     def test_multiple_paragraphs_order(self):
@@ -104,7 +104,7 @@ class TestTextOnly:
             ],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         first_pos = result.index("First")
         second_pos = result.index("Second")
         assert first_pos < second_pos
@@ -114,7 +114,7 @@ class TestTextOnly:
             "nodes": [_make_node("uid1", 1, block_type="textbox", full_text="Box text")],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert "<textbox" in result
         assert "Box text</textbox>" in result
 
@@ -128,7 +128,7 @@ class TestTextOnly:
             ],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert result.count(">◦</p>") == 2
         assert result.count(">-</p>") == 2
 
@@ -137,7 +137,7 @@ class TestTextOnly:
             "nodes": [_make_node("uid1", 1, block_type="footnote", full_text="Note text")],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert "<footnote" in result
         assert "Note text</footnote>" in result
 
@@ -152,7 +152,7 @@ class TestSimpleTable:
             "nodes": [_make_td("uid1", 1, row=0, col=0, full_text="Cell 1")],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert "<table>" in result
         assert "<tr>" in result
         assert "<td" in result
@@ -169,7 +169,7 @@ class TestSimpleTable:
             ],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert result.count("<tr>") == 2
         assert result.count("</tr>") == 2
         # Row order
@@ -192,7 +192,7 @@ class TestSimpleTable:
                 {"type": "contains", "source": "uid_td", "target": "uid_child"},
             ],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert "Child text" in result
         # Child should not appear as standalone <p> outside table
         lines = result.split("\n")
@@ -210,7 +210,7 @@ class TestMergedCells:
             "nodes": [_make_td("uid1", 1, row=0, col=0, full_text="Wide", colspan=3)],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert 'colspan="3"' in result
 
     def test_rowspan(self):
@@ -218,7 +218,7 @@ class TestMergedCells:
             "nodes": [_make_td("uid1", 1, row=0, col=0, full_text="Tall", rowspan=2)],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert 'rowspan="2"' in result
 
     def test_no_colspan_when_1(self):
@@ -226,7 +226,7 @@ class TestMergedCells:
             "nodes": [_make_td("uid1", 1, row=0, col=0, full_text="Normal", colspan=1)],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert "colspan" not in result
 
 
@@ -240,7 +240,7 @@ class TestStyleAttributes:
             "nodes": [_make_td("uid1", 1, row=0, col=0, full_text="Label", bgcolor="#c0c0c0")],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert 'bgcolor="#c0c0c0"' in result
 
     def test_bgcolor_white_skipped(self):
@@ -248,7 +248,7 @@ class TestStyleAttributes:
             "nodes": [_make_td("uid1", 1, row=0, col=0, full_text="Normal", bgcolor="#ffffff")],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert "bgcolor" not in result
 
     def test_bgcolor_black_skipped(self):
@@ -256,7 +256,7 @@ class TestStyleAttributes:
             "nodes": [_make_td("uid1", 1, row=0, col=0, full_text="Normal", bgcolor="#000000")],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert "bgcolor" not in result
 
     def test_text_color(self):
@@ -264,7 +264,7 @@ class TestStyleAttributes:
             "nodes": [_make_td("uid1", 1, row=0, col=0, full_text="Guide", text_color="#0000ff")],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert 'color="#0000ff"' in result
 
     def test_text_color_black_skipped(self):
@@ -272,7 +272,7 @@ class TestStyleAttributes:
             "nodes": [_make_td("uid1", 1, row=0, col=0, full_text="Normal", text_color="#000000")],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert "color=" not in result
 
     def test_font_size(self):
@@ -280,7 +280,7 @@ class TestStyleAttributes:
             "nodes": [_make_node("uid1", 1, full_text="Title", font_size="16pt")],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert 'font-size="16pt"' in result
 
     def test_border_sides(self):
@@ -288,7 +288,7 @@ class TestStyleAttributes:
             "nodes": [_make_td("uid1", 1, row=0, col=0, full_text="Cell", border_sides=["left", "right", "top", "bottom"])],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert 'border="left,right,top,bottom"' in result
 
     def test_diagonal(self):
@@ -296,7 +296,7 @@ class TestStyleAttributes:
             "nodes": [_make_td("uid1", 1, row=0, col=0, full_text="", diagonal=True)],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert 'diagonal="true"' in result
 
     def test_no_diagonal_when_false(self):
@@ -304,7 +304,7 @@ class TestStyleAttributes:
             "nodes": [_make_td("uid1", 1, row=0, col=0, full_text="Cell", diagonal=False)],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert "diagonal" not in result
 
 
@@ -318,7 +318,7 @@ class TestIDPreservation:
             "nodes": [_make_node("uid1", 42, full_text="Text")],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert 'id="42"' in result
 
     def test_td_id(self):
@@ -326,7 +326,7 @@ class TestIDPreservation:
             "nodes": [_make_td("uid1", 99, row=0, col=0, full_text="Cell")],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert 'id="99"' in result
 
 
@@ -344,7 +344,7 @@ class TestNoRole:
             ],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert "role=" not in result
 
 
@@ -364,7 +364,7 @@ class TestDocumentOrder:
             ],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         p_pos = result.index("Before table")
         t_pos = result.index("<table>")
         assert p_pos < t_pos
@@ -380,7 +380,7 @@ class TestDocumentOrder:
             ],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         t_pos = result.index("<table>")
         p_pos = result.index("After table")
         assert t_pos < p_pos
@@ -396,7 +396,7 @@ class TestXMLEscape:
             "nodes": [_make_node("uid1", 1, full_text="A & B")],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert "A &amp; B" in result
 
     def test_angle_brackets_escaped(self):
@@ -404,7 +404,7 @@ class TestXMLEscape:
             "nodes": [_make_node("uid1", 1, full_text="<script>alert(1)</script>")],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert "&lt;script&gt;" in result
 
 
@@ -423,7 +423,7 @@ class TestMultipleTables:
             ],
             "edges": [],
         }
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert result.count("<table>") == 2
         assert result.count("</table>") == 2
         t1_pos = result.index("T1")
@@ -437,7 +437,7 @@ class TestMultipleTables:
 
 class TestNestedTable:
     def test_nested_table_cells_not_lost(self):
-        """중첩 표의 셀이 CVD 출력에서 누락되지 않아야 한다."""
+        """중첩 표의 셀이 HDML 출력에서 누락되지 않아야 한다."""
         outer_td = _make_td(
             "uid:401", 401, row=0, col=0, scope_table_id=9,
             full_text="Outer", table_path="0",
@@ -449,7 +449,7 @@ class TestNestedTable:
             position={"list_pos": 0, "para_pos": 41, "char_pos": 0},
         )
         graph = {"nodes": [outer_td, inner_td], "edges": []}
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         # 두 표 모두 출력되어야 함
         assert result.count("<table>") == 2
         assert 'id="401"' in result
@@ -465,7 +465,7 @@ class TestNestedTable:
             position={"list_pos": 0, "para_pos": 50, "char_pos": 0},
         )
         graph = {"nodes": [td], "edges": []}
-        result = serialize_enriched_cvd(graph)
+        result = serialize_enriched_hdml(graph)
         assert 'id="500"' in result
         assert "Deep" in result
         assert "<table>" in result

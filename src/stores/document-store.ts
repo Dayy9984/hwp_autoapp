@@ -349,7 +349,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     }
     set({ uploadedFiles: [...get().uploadedFiles, tempFile], isLoading: true })
 
-    // 2. 백그라운드에서 CVD 추출 및 content 로드
+    // 2. 백그라운드에서 HDML 추출 및 content 로드
     try {
       const result = await window.electronAPI.file.readHwp(filePath)
       if (result.success && result.text) {

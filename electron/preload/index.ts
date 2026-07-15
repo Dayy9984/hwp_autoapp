@@ -144,7 +144,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('app:status', subscription)
   },
 
-  // Progress 이벤트 (CVD, RAG 등 모든 progress 이벤트)
+  // Progress 이벤트 (HDML, RAG 등 모든 progress 이벤트)
   onProgress: (callback: (event: string, data: any) => void) => {
     const subscription = (_event: any, event: string, data: any) => callback(event, data)
     ipcRenderer.on('chat:progress', subscription)
@@ -217,28 +217,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
     set: (consented: boolean) => ipcRenderer.invoke('consent:set', { consented }),
   },
 
-  // Phase 4: CVD 추출 및 Diff 생성
-  cvd: {
+  // Phase 4: HDML 추출 및 Diff 생성
+  hdml: {
     extractPair: (args: {
       projectId: string
       pairId: string
       templatePath: string
       filledPath: string
-    }) => ipcRenderer.invoke('cvd:extractPair', args),
+    }) => ipcRenderer.invoke('hdml:extractPair', args),
     generateDiff: (args: {
       projectId: string
       pairId: string
-    }) => ipcRenderer.invoke('cvd:generateDiff', args),
+    }) => ipcRenderer.invoke('hdml:generateDiff', args),
     processTemplatePair: (args: {
       projectId: string
       pairId: string
       templatePath: string
       filledPath: string
-    }) => ipcRenderer.invoke('cvd:processTemplatePair', args),
+    }) => ipcRenderer.invoke('hdml:processTemplatePair', args),
     // 진행 이벤트 수신
     onProgress: (callback: (data: { pairId: string; progress: number; message: string }) => void) => {
       const subscription = (_event: any, event: string, data: any) => {
-        if (event === 'cvd:progress') {
+        if (event === 'hdml:progress') {
           callback(data)
         }
       }
@@ -609,8 +609,8 @@ declare global {
       consent: {
         set: (consented: boolean) => Promise<{ ok: boolean; error?: string }>
       }
-      // Phase 4: CVD 추출 및 Diff 생성
-      cvd: {
+      // Phase 4: HDML 추출 및 Diff 생성
+      hdml: {
         extractPair: (args: {
           projectId: string
           pairId: string
@@ -618,8 +618,8 @@ declare global {
           filledPath: string
         }) => Promise<{
           success: boolean
-          template_cvd_path?: string
-          filled_cvd_path?: string
+          template_hdml_path?: string
+          filled_hdml_path?: string
           error?: string
         }>
         generateDiff: (args: {

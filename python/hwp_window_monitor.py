@@ -172,7 +172,7 @@ class HwpWindowFinder:
         if class_value.startswith("HwndWrapper") and not title_str.strip():
             return True
 
-        # CVD 추출 등 임시 작업용 문서 필터링 (자동 바인딩 방지)
+        # HDML 추출 등 임시 작업용 문서 필터링 (자동 바인딩 방지)
         if title_str.startswith("빈 문서") or title_str.startswith("새 문서"):
             return True
 

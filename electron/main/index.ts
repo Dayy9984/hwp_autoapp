@@ -47,7 +47,7 @@ import { getPythonBridge, getFileReaderBridge, PythonBridge, getWindowMonitor, W
 
 
 
-import { getCvdBridge, CvdBridge } from '../services/cvd-bridge'
+import { getHdmlBridge, HdmlBridge } from '../services/hdml-bridge'
 
 
 
@@ -362,7 +362,7 @@ let fileReaderBridge: PythonBridge | null = null
 
 
 
-let cvdBridge: CvdBridge | null = null
+let hdmlBridge: HdmlBridge | null = null
 
 
 
@@ -1495,7 +1495,7 @@ async function initPythonBridge() {
 
 
 
-async function initCvdBridge() {
+async function initHdmlBridge() {
 
 
 
@@ -1503,7 +1503,7 @@ async function initCvdBridge() {
 
 
 
-    if (cvdBridge && cvdBridge.isRunning()) {
+    if (hdmlBridge && hdmlBridge.isRunning()) {
 
 
 
@@ -1515,7 +1515,7 @@ async function initCvdBridge() {
 
 
 
-    cvdBridge = getCvdBridge(process.env.APP_ROOT!)
+    hdmlBridge = getHdmlBridge(process.env.APP_ROOT!)
 
 
 
@@ -1523,11 +1523,11 @@ async function initCvdBridge() {
 
 
 
-    if (cvdBridge.listenerCount('progress') === 0) {
+    if (hdmlBridge.listenerCount('progress') === 0) {
 
 
 
-      cvdBridge.on('progress', (event: string, data: any) => {
+      hdmlBridge.on('progress', (event: string, data: any) => {
 
 
 
@@ -1555,11 +1555,11 @@ async function initCvdBridge() {
 
 
 
-    await cvdBridge.start()
+    await hdmlBridge.start()
 
 
 
-    console.log('[Main] CVD Bridge initialized')
+    console.log('[Main] HDML Bridge initialized')
 
 
 
@@ -1567,7 +1567,7 @@ async function initCvdBridge() {
 
 
 
-    console.error('[Main] Failed to initialize CVD Bridge:', err)
+    console.error('[Main] Failed to initialize HDML Bridge:', err)
 
 
 
@@ -1698,7 +1698,7 @@ async function shutdownBridges(reason?: string) {
 
 
 
-    if (cvdBridge) {
+    if (hdmlBridge) {
 
 
 
@@ -1706,11 +1706,11 @@ async function shutdownBridges(reason?: string) {
 
 
 
-        cvdBridge.stop().catch((err) => {
+        hdmlBridge.stop().catch((err) => {
 
 
 
-          console.error('[Main] CVD Bridge stop failed:', err)
+          console.error('[Main] HDML Bridge stop failed:', err)
 
 
 
@@ -1814,7 +1814,7 @@ async function shutdownBridges(reason?: string) {
 
 
 
-    cvdBridge = null
+    hdmlBridge = null
 
 
 
@@ -7326,7 +7326,7 @@ function generateRejectReason(result: any, type: 'all' | 'partial'): string {
 
 
 
-// CVD 추출 및 Diff (Phase 4)
+// HDML 추출 및 Diff (Phase 4)
 
 
 
@@ -7344,11 +7344,11 @@ ipcMain.handle('consent:set', async (_, { consented }: { consented: boolean }) =
 })
 
 
-// CVD 추출 (Template Pair)
+// HDML 추출 (Template Pair)
 
 
 
-ipcMain.handle('cvd:extractPair', async (_, args: {
+ipcMain.handle('hdml:extractPair', async (_, args: {
 
 
 
@@ -7450,7 +7450,7 @@ ipcMain.handle('cvd:extractPair', async (_, args: {
 
 
 
-    console.log('[Main] cvd:extractPair - projectId:', args.projectId, ', pairId:', args.pairId)
+    console.log('[Main] hdml:extractPair - projectId:', args.projectId, ', pairId:', args.pairId)
 
 
 
@@ -7458,7 +7458,7 @@ ipcMain.handle('cvd:extractPair', async (_, args: {
 
 
 
-    // Python(FileReaderBridge)에 CVD 추출 요청
+    // Python(FileReaderBridge)에 HDML 추출 요청
     if (fileReaderBridge && !fileReaderBridge.isRunning()) {
       try { await fileReaderBridge.start() } catch {}
     }
@@ -7466,7 +7466,7 @@ ipcMain.handle('cvd:extractPair', async (_, args: {
       return { success: false, error: 'FileReader bridge not running' }
     }
 
-    const result = await fileReaderBridge.call('cvd:extractPair', {
+    const result = await fileReaderBridge.call('hdml:extractPair', {
 
 
 
@@ -7510,7 +7510,7 @@ ipcMain.handle('cvd:extractPair', async (_, args: {
 
 
 
-    console.error('[Main] cvd:extractPair error:', err)
+    console.error('[Main] hdml:extractPair error:', err)
 
 
 
@@ -7530,11 +7530,11 @@ ipcMain.handle('cvd:extractPair', async (_, args: {
 
 
 
-// Diff 생성 (CVD 추출 후 호출)
+// Diff 생성 (HDML 추출 후 호출)
 
 
 
-ipcMain.handle('cvd:generateDiff', async (_, args: {
+ipcMain.handle('hdml:generateDiff', async (_, args: {
 
 
 
@@ -7573,7 +7573,7 @@ ipcMain.handle('cvd:generateDiff', async (_, args: {
 
 
 
-    console.log('[Main] cvd:generateDiff - projectId:', args.projectId, ', pairId:', args.pairId)
+    console.log('[Main] hdml:generateDiff - projectId:', args.projectId, ', pairId:', args.pairId)
 
 
 
@@ -7581,7 +7581,7 @@ ipcMain.handle('cvd:generateDiff', async (_, args: {
 
 
 
-    const result = await pythonBridge.call('cvd:generateDiff', {
+    const result = await pythonBridge.call('hdml:generateDiff', {
 
 
 
@@ -7613,7 +7613,7 @@ ipcMain.handle('cvd:generateDiff', async (_, args: {
 
 
 
-    console.error('[Main] cvd:generateDiff error:', err)
+    console.error('[Main] hdml:generateDiff error:', err)
 
 
 
@@ -7633,11 +7633,11 @@ ipcMain.handle('cvd:generateDiff', async (_, args: {
 
 
 
-// CVD 추출 + Diff 생성 통합 (편의용)
+// HDML 추출 + Diff 생성 통합 (편의용)
 
 
 
-ipcMain.handle('cvd:processTemplatePair', async (_, args: {
+ipcMain.handle('hdml:processTemplatePair', async (_, args: {
 
 
 
@@ -7723,7 +7723,7 @@ ipcMain.handle('cvd:processTemplatePair', async (_, args: {
 
 
 
-    console.log('[Main] cvd:processTemplatePair - starting full process for pairId:', args.pairId)
+    console.log('[Main] hdml:processTemplatePair - starting full process for pairId:', args.pairId)
 
 
 
@@ -7739,7 +7739,7 @@ ipcMain.handle('cvd:processTemplatePair', async (_, args: {
 
 
 
-    // 1. CVD 추출
+    // 1. HDML 추출
     if (fileReaderBridge && !fileReaderBridge.isRunning()) {
       try { await fileReaderBridge.start() } catch {}
     }
@@ -7747,7 +7747,7 @@ ipcMain.handle('cvd:processTemplatePair', async (_, args: {
       return { success: false, error: 'FileReader bridge not running' }
     }
 
-    const extractResult = await fileReaderBridge.call('cvd:extractPair', {
+    const extractResult = await fileReaderBridge.call('hdml:extractPair', {
 
 
 
@@ -7796,7 +7796,7 @@ ipcMain.handle('cvd:processTemplatePair', async (_, args: {
 
 
     // 2. Diff 생성
-    const diffResult = await fileReaderBridge.call('cvd:generateDiff', {
+    const diffResult = await fileReaderBridge.call('hdml:generateDiff', {
 
 
 
@@ -7828,7 +7828,7 @@ ipcMain.handle('cvd:processTemplatePair', async (_, args: {
 
 
 
-    console.error('[Main] cvd:processTemplatePair error:', err)
+    console.error('[Main] hdml:processTemplatePair error:', err)
 
 
 

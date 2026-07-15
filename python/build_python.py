@@ -92,13 +92,13 @@ PROCESSES = [
         ],
     },
     {
-        "name": "File Reader Process (File/CVD)",
+        "name": "File Reader Process (File/HDML)",
         "entry": "file_reader_process.py",
         "output": "inserty_file_reader",
-        # engine: services/cvd_service.py top-level import
+        # engine: services/hdml_service.py top-level import
         # pptx: file_reader_process.py:163 lazy import — Nuitka 추적 실패
-        # pyhwpx: services/cvd_service.py:171 lazy import
-        # PyPDF2: services/cvd_service.py extract_pdf 사용
+        # pyhwpx: services/hdml_service.py:171 lazy import
+        # PyPDF2: services/hdml_service.py extract_pdf 사용
         # openpyxl: 엑셀 readExcelFile
         # docx: readDocFile
         "modules": [
@@ -168,7 +168,7 @@ def step_2_build_with_nuitka(process_config):
         # ⚠️ 다음 패키지들은 NOFOLLOW 금지 (pyhwpx top-level deps):
         #   numpy, pandas, PIL, pyperclip
         # ⚠️ docx도 NOFOLLOW 금지 — file_reader_process.py가 사용
-        # ⚠️ PyPDF2, pptx도 NOFOLLOW 금지 — cvd_service.extract_pdf, readPptFile에서 사용
+        # ⚠️ PyPDF2, pptx도 NOFOLLOW 금지 — hdml_service.extract_pdf, readPptFile에서 사용
     ]
 
     # Nuitka 명령 구성

@@ -5,7 +5,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from processing.extraction.cvd_extractor import CVDExtractor, clean_table_html
+from processing.extraction.hdml_extractor import HDMLExtractor, clean_table_html
 
 
 def test_clean_table_html_emits_table_path_and_span_meta():
@@ -26,8 +26,8 @@ def test_clean_table_html_emits_table_path_and_span_meta():
     assert td_metas[1]["colspan"] == 2
 
 
-def test_cvd_td_mapping_uses_row_col_not_meta_order():
-    ex = CVDExtractor(None)
+def test_hdml_td_mapping_uses_row_col_not_meta_order():
+    ex = HDMLExtractor(None)
     ex.extracted_elements = [
         {
             "type": "table",
@@ -59,16 +59,16 @@ def test_cvd_td_mapping_uses_row_col_not_meta_order():
 
     result = ex._extract_content_and_id_to_pos_from_extracted_elements()
     assert result is not None
-    cvd, id_map = result
+    hdml, id_map = result
 
-    td_ids = re.findall(r'<td id="(\d+)"', cvd)
+    td_ids = re.findall(r'<td id="(\d+)"', hdml)
     assert len(td_ids) == 2
     assert id_map[int(td_ids[0])] == (0, 10, 1)
     assert id_map[int(td_ids[1])] == (0, 11, 1)
 
 
-def test_cvd_nested_table_path_flow_keeps_two_td_signatures():
-    ex = CVDExtractor(None)
+def test_hdml_nested_table_path_flow_keeps_two_td_signatures():
+    ex = HDMLExtractor(None)
     ex.extracted_elements = [
         {
             "type": "table",
@@ -108,10 +108,10 @@ def test_cvd_nested_table_path_flow_keeps_two_td_signatures():
 
     result = ex._extract_content_and_id_to_pos_from_extracted_elements()
     assert result is not None
-    cvd, id_map = result
-    assert cvd.count("data-td-sig=") == 2
+    hdml, id_map = result
+    assert hdml.count("data-td-sig=") == 2
 
-    td_ids = re.findall(r'<td id="(\d+)"', cvd)
+    td_ids = re.findall(r'<td id="(\d+)"', hdml)
     assert len(td_ids) == 2
     assert id_map[int(td_ids[0])] == (0, 1, 1)
     assert id_map[int(td_ids[1])] == (1, 1, 2)

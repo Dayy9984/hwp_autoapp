@@ -14,7 +14,7 @@ if MANUAL_DIR not in sys.path:
     sys.path.insert(0, MANUAL_DIR)
 
 
-from compare_real_doc_cvd_hwpml_graph import run_real_doc_compare
+from compare_real_doc_hdml_hwpml_graph import run_real_doc_compare
 
 
 DEFAULT_FILE = r"C:\Users\dlgkr\Downloads\[신청서] 2026년 부니콘 씨드 육성사업(부산 예비창업패키지) (1) (2).hwp"
@@ -63,34 +63,34 @@ def _evaluate_report(
     if warnings:
         failures.append(f"graph parse_warnings present: {', '.join(str(w) for w in warnings)}")
 
-    cvd_td = int(((report.get("cvd") or {}).get("td_count")) or 0)
+    hdml_td = int(((report.get("hdml") or {}).get("td_count")) or 0)
     graph_td = int(((report.get("graph") or {}).get("td_count")) or 0)
-    if cvd_td != graph_td:
-        failures.append(f"cvd td_count({cvd_td}) != graph td_count({graph_td})")
+    if hdml_td != graph_td:
+        failures.append(f"hdml td_count({hdml_td}) != graph td_count({graph_td})")
 
     return failures
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run Bunicon (pages 2~6) completeness regression gate for runtime/cvd registry sources."
+        description="Run Bunicon (pages 2~6) completeness regression gate for runtime/hdml registry sources."
     )
     parser.add_argument("--file", default=DEFAULT_FILE)
     parser.add_argument("--start-page", type=int, default=2)
     parser.add_argument("--end-page", type=int, default=6)
-    parser.add_argument("--sources", default="runtime,cvd", help="comma-separated: runtime,cvd")
+    parser.add_argument("--sources", default="runtime,hdml", help="comma-separated: runtime,hdml")
     parser.add_argument("--min-structure", type=float, default=0.99)
     parser.add_argument("--min-overall-v2", type=float, default=0.90)
     parser.add_argument("--min-hwpml-signature", type=float, default=0.98)
     parser.add_argument("--min-hwpml-style", type=float, default=0.85)
-    parser.add_argument("--max-runtime-drop-vs-cvd", type=float, default=0.02)
+    parser.add_argument("--max-runtime-drop-vs-hdml", type=float, default=0.02)
     parser.add_argument("--out-dir", default=os.path.abspath(os.path.join(ROOT, "..", "tmp")))
     args = parser.parse_args()
 
     requested_sources = [s.strip().lower() for s in str(args.sources or "").split(",") if s.strip()]
-    sources = [s for s in requested_sources if s in {"runtime", "cvd"}]
+    sources = [s for s in requested_sources if s in {"runtime", "hdml"}]
     if not sources:
-        sources = ["runtime", "cvd"]
+        sources = ["runtime", "hdml"]
 
     os.makedirs(args.out_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -125,12 +125,12 @@ def main() -> int:
         )
 
     cross_failures: List[str] = []
-    if "runtime" in reports and "cvd" in reports:
+    if "runtime" in reports and "hdml" in reports:
         runtime_score = _metric(reports["runtime"], ["comparison", "scores_v2", "overall_score_v2"])
-        cvd_score = _metric(reports["cvd"], ["comparison", "scores_v2", "overall_score_v2"])
-        if (cvd_score - runtime_score) > float(args.max_runtime_drop_vs_cvd):
+        hdml_score = _metric(reports["hdml"], ["comparison", "scores_v2", "overall_score_v2"])
+        if (hdml_score - runtime_score) > float(args.max_runtime_drop_vs_hdml):
             cross_failures.append(
-                f"runtime overall_score_v2 dropped too much vs cvd: runtime={runtime_score:.6f}, cvd={cvd_score:.6f}"
+                f"runtime overall_score_v2 dropped too much vs hdml: runtime={runtime_score:.6f}, hdml={hdml_score:.6f}"
             )
 
     all_failures: List[str] = []
@@ -151,7 +151,7 @@ def main() -> int:
             "min_overall_v2": float(args.min_overall_v2),
             "min_hwpml_signature": float(args.min_hwpml_signature),
             "min_hwpml_style": float(args.min_hwpml_style),
-            "max_runtime_drop_vs_cvd": float(args.max_runtime_drop_vs_cvd),
+            "max_runtime_drop_vs_hdml": float(args.max_runtime_drop_vs_hdml),
         },
         "failures": all_failures,
         "metrics": {
@@ -160,7 +160,7 @@ def main() -> int:
                 "overall_score_v2": _metric(report, ["comparison", "scores_v2", "overall_score_v2"]),
                 "hwpml_signature_coverage": _metric(report, ["hwpml_graph_comparison", "ratios", "signature_coverage"]),
                 "hwpml_overall_style_score": _metric(report, ["hwpml_graph_comparison", "overall_style_score"]),
-                "cvd_td_count": int(((report.get("cvd") or {}).get("td_count")) or 0),
+                "hdml_td_count": int(((report.get("hdml") or {}).get("td_count")) or 0),
                 "graph_td_count": int(((report.get("graph") or {}).get("td_count")) or 0),
             }
             for source, report in reports.items()

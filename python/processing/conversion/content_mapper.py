@@ -79,7 +79,7 @@ class LocationTrackingSystem:
         extracted_data: Tuple[str, Dict[int, Tuple[int, int, int]]],
         log_callback: Callable[[str, Optional[str]], None],
     ):
-        text_format, id_to_coordinates = extracted_data  # cvd → text_format
+        text_format, id_to_coordinates = extracted_data  # hdml → text_format
         self.log_callback = (
             log_callback if log_callback else (lambda message, level: None)
         )
@@ -100,7 +100,7 @@ class LocationTrackingSystem:
 
         self.initialize_from_text(
             text_format, id_to_coordinates
-        )  # initialize_from_cvd → initialize_from_text
+        )  # initialize_from_hdml → initialize_from_text
 
     def initialize_from_text(self, text_format: str, id_to_coordinates: Dict):
         """텍스트 형식 데이터로 초기화"""

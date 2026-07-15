@@ -789,7 +789,7 @@ def build_document_graph_from_hwpml(
     # Pre-collect list_pos values owned by td segments so that child text
     # segments sharing the same list_pos do NOT consume from raw_text queue.
     # Without this, td-child text segments steal raw_text entries meant for
-    # standalone paragraphs, causing text misalignment in the CVD output.
+    # standalone paragraphs, causing text misalignment in the HDML output.
     td_list_positions: Set[int] = set()
     _text_child_types = {"text", "list", "textbox", "annotation_anchor", "annotation_content"}
     for seg in segments:

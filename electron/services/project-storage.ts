@@ -121,13 +121,13 @@ class ProjectStorage {
     }
 
     /**
-     * CVD 파일 존재 확인
+     * HDML 파일 존재 확인
      */
-    cvdFilesExist(projectId: string, pairId: string): { template: boolean; filled: boolean } {
+    hdmlFilesExist(projectId: string, pairId: string): { template: boolean; filled: boolean } {
         const pairPath = path.join(this.getProjectBasePath(projectId), 'template_pairs', pairId)
         return {
-            template: fs.existsSync(path.join(pairPath, 'template.cvd.md')),
-            filled: fs.existsSync(path.join(pairPath, 'filled.cvd.md'))
+            template: fs.existsSync(path.join(pairPath, 'template.hdml.md')),
+            filled: fs.existsSync(path.join(pairPath, 'filled.hdml.md'))
         }
     }
 

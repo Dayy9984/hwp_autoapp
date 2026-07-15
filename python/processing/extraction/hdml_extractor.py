@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-CVD (Claude View Document) extractor for HWP documents.
+HDML (Claude View Document) extractor for HWP documents.
 """
 
 import os
@@ -724,8 +724,8 @@ def clean_table_html(
     return html, last_pos, td_metas
 
 
-class CVDExtractor:
-    """CVD 문서 추출기 - 구조 유지 추출 (표/텍스트박스/일반텍스트)"""
+class HDMLExtractor:
+    """HDML 문서 추출기 - 구조 유지 추출 (표/텍스트박스/일반텍스트)"""
 
     def __init__(self, hwp: HwpRawWrapper, log_to_main: Callable[[str, str], None] = None):
         self.hwp = hwp if hasattr(hwp, "init_scan") else (hwp.hwp if hasattr(hwp, "hwp") and hasattr(hwp.hwp, "init_scan") else hwp)
@@ -740,13 +740,13 @@ class CVDExtractor:
         self.extracted_elements, self.id_to_pos, self.pos_to_shape, self.cell_info_map, self.cell_style_map = [], {}, {}, {}, {}
         self.pos_to_page: Dict[Tuple[int, int, int], int] = {}
 
-    def _save_cvd_markdown(self, cvd_text: str) -> None:
-        """CVD 마크다운 저장 """
+    def _save_hdml_markdown(self, hdml_text: str) -> None:
+        """HDML 마크다운 저장 """
         try:
             ed = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "experiments")); os.path.exists(ed) or os.makedirs(ed)
-            fp = os.path.join(ed, "document_cvd.md"); mps = ["# Document CVD", f"\n**Timestamp**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "\n## CVD (Raw)\n", "```\n" + (cvd_text or "") + "\n```"]
-            open(fp, "w", encoding="utf-8").write("\n".join(mps)); self.log_to_main(f"CVD markdown saved: {fp}")
-        except Exception as e: self.log_to_main(f"Failed to save CVD markdown: {e}", "ERROR")
+            fp = os.path.join(ed, "document_hdml.md"); mps = ["# Document HDML", f"\n**Timestamp**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "\n## HDML (Raw)\n", "```\n" + (hdml_text or "") + "\n```"]
+            open(fp, "w", encoding="utf-8").write("\n".join(mps)); self.log_to_main(f"HDML markdown saved: {fp}")
+        except Exception as e: self.log_to_main(f"Failed to save HDML markdown: {e}", "ERROR")
 
     def _map_id_to_pos(self, pos: Tuple[int, int, int]) -> int | None:
         """ID 매핑 """
@@ -1690,7 +1690,7 @@ class CVDExtractor:
     def _extract_content_and_id_to_pos_from_extracted_elements(
         self,
     ) -> Tuple[str, Dict[int, Tuple[int, int, int]]] | None:
-        """CVD 추출 (Command + Strategy + Builder + Parser 패턴)"""
+        """HDML 추출 (Command + Strategy + Builder + Parser 패턴)"""
         from dataclasses import dataclass, field
         from typing import Optional as Opt, List as ListType, Dict as DictType, Iterator, Callable
         from abc import ABC, abstractmethod
@@ -2124,24 +2124,24 @@ class CVDExtractor:
         self.id_to_pos = {}
         ctx = CTX(id_map=self.id_to_pos)
         procs = [TP(self), FP(self), ENP(self), TBP(self), IP(self), LP(self), PP(self)]
-        cvd = ""
+        hdml = ""
 
         try:
             for element in self.extracted_elements:
                 for proc in procs:
                     if proc.can(element):
-                        cvd += proc.proc(element, ctx)
+                        hdml += proc.proc(element, ctx)
                         break
 
         except Exception as e:
             self.log_to_main(f"❌ 오류: {e}", "ERROR")
 
-        if not cvd or not ctx.id_map:
+        if not hdml or not ctx.id_map:
             return None
-        return cvd, ctx.id_map
+        return hdml, ctx.id_map
 
     def _create_page_range_prefix(self, start_page: int, end_page: int) -> str:
-        """CVD 맨 앞줄에 들어갈 페이지 범위 정보 텍스트 생성"""
+        """HDML 맨 앞줄에 들어갈 페이지 범위 정보 텍스트 생성"""
         return (f"<scanned_page_range>\n{start_page} ~ {end_page} 페이지\n</scanned_page_range>\n\n" if start_page != end_page else f"<scanned_page_range>\n{start_page} 페이지\n</scanned_page_range>\n\n")
 
     def _create_style_sidecar_from_mapping_data(self) -> str:
@@ -2360,10 +2360,10 @@ class CVDExtractor:
 
         return start_text + "\n".join(sections) + "\n" + end_text if sections else start_text + end_text
 
-    def extract_cvd(
+    def extract_hdml(
         self, page_range: Dict[str, int]
     ) -> Tuple[str, Dict[int, Tuple[int, int, int]]] | None:
-        """CVD 추출 (Strategy + Chain of Responsibility + Builder + Template Method 패턴)"""
+        """HDML 추출 (Strategy + Chain of Responsibility + Builder + Template Method 패턴)"""
         from dataclasses import dataclass
         from typing import Optional as Opt, Dict as DictType, Tuple as TupleType
         from abc import ABC, abstractmethod
@@ -2386,11 +2386,11 @@ class CVDExtractor:
         @dataclass
         class ExtractionResult:
             """추출 결과"""
-            cvd_text: str
+            hdml_text: str
             id_to_pos: DictType[int, TupleType[int, int, int]]
 
             def to_tuple(self) -> TupleType[str, DictType[int, TupleType[int, int, int]]]:
-                return (self.cvd_text, self.id_to_pos)
+                return (self.hdml_text, self.id_to_pos)
 
         class PageRangeExtractor:
             """페이지 범위 추출기 (Strategy)"""
@@ -2479,15 +2479,15 @@ class CVDExtractor:
                     return None
                 return page_range_obj
 
-        class CVDBuilder:
-            """CVD 빌더"""
+        class HDMLBuilder:
+            """HDML 빌더"""
             @staticmethod
             def build(prefix: str, body: str) -> str:
-                """CVD 조합"""
+                """HDML 조합"""
                 return prefix + "<main_content>\n" + body + "</main_content>\n"
 
-        class CVDExtractionPipeline:
-            """CVD 추출 파이프라인 (Template Method)"""
+        class HDMLExtractionPipeline:
+            """HDML 추출 파이프라인 (Template Method)"""
             def __init__(self, extractor, logger, hwp):
                 self.extractor = extractor
                 self.logger = logger
@@ -2508,32 +2508,32 @@ class CVDExtractor:
                 # 3. 콘텐츠 추출
                 extracted = self.extractor._extract_content_and_id_to_pos_from_extracted_elements()
                 if not extracted:
-                    self.logger("❌ cvd 추출 결과 None", "ERROR")
+                    self.logger("❌ hdml 추출 결과 None", "ERROR")
                     return None
 
                 body, id_to_pos = extracted
 
-                # 4. CVD 빌드
-                cvd = CVDBuilder.build(prefix, body)
+                # 4. HDML 빌드
+                hdml = HDMLBuilder.build(prefix, body)
 
                 # 5. 페이지 이동 (optional)
                 if page_range.current is not None:
                     self.extractor._go_to_page(self.hwp, page_range.current)
 
                 # 6. Dev 모드 저장 (optional)
-                self._save_if_dev(cvd)
+                self._save_if_dev(hdml)
 
-                return ExtractionResult(cvd, id_to_pos)
+                return ExtractionResult(hdml, id_to_pos)
 
-            def _save_if_dev(self, cvd: str) -> None:
-                """개발 모드에서 CVD 저장"""
+            def _save_if_dev(self, hdml: str) -> None:
+                """개발 모드에서 HDML 저장"""
                 import os
                 try:
                     is_dev = os.environ.get("NODE_ENV") == "development"
                     if is_dev:
-                        self.extractor._save_cvd_markdown(cvd)
+                        self.extractor._save_hdml_markdown(hdml)
                 except Exception as e:
-                    self.logger(f"CVD 저장 중 오류: {e}", "ERROR")
+                    self.logger(f"HDML 저장 중 오류: {e}", "ERROR")
 
         # 메인 실행
         # 1. 검증 체인 구성
@@ -2548,10 +2548,10 @@ class CVDExtractor:
         if validated_range is None:
             return None
 
-        self.log_to_main(f"extract_cvd page_range: {page_range}")
+        self.log_to_main(f"extract_hdml page_range: {page_range}")
 
         # 3. 파이프라인 실행
-        pipeline = CVDExtractionPipeline(self, self.log_to_main, self.hwp)
+        pipeline = HDMLExtractionPipeline(self, self.log_to_main, self.hwp)
         result = pipeline.execute(validated_range)
 
         if result is None:
@@ -2568,7 +2568,7 @@ class CVDExtractor:
         self.global_id = 1
 
 
-class DocumentExtractor(CVDExtractor):
+class DocumentExtractor(HDMLExtractor):
     """Backward-compatible alias."""
 
     pass

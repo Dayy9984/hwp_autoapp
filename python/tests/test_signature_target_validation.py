@@ -6,7 +6,7 @@ from dataclasses import dataclass
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from hwp_com_process import DocumentProcessor
-from processing.extraction.cvd_extractor import CVDExtractor
+from processing.extraction.hdml_extractor import HDMLExtractor
 from processing.structure.segment_registry import SegmentRegistry
 
 
@@ -173,7 +173,7 @@ def test_validate_target_contract_checks_block_type_and_scope():
 
 
 def _build_registry_with_signatures() -> SegmentRegistry:
-    ex = CVDExtractor(None)
+    ex = HDMLExtractor(None)
     ex.extracted_elements = [
         {
             "type": "table",

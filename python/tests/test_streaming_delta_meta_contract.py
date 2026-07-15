@@ -241,7 +241,7 @@ def test_integrated_prompt_builder_is_v711():
 
     prompt = build_system_prompt_v7_11()
     # v7.11 핵심 섹션 존재 확인
-    assert "ENRICHED_CVD" in prompt
+    assert "ENRICHED_HDML" in prompt
     assert "문서 분석 추론" in prompt
     assert "셀 역할 추론" in prompt
     assert "Delta Validation Contract (v7.11)" in prompt

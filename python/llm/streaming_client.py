@@ -641,12 +641,12 @@ def _execute_search_rag(
 
 SYSTEM_PROMPT_STREAMING = (
     "[DEPRECATED] Legacy streaming prompt placeholder. "
-    "Runtime prompt is build_system_prompt_v7_11() (Enriched CVD + Tool Calling only)."
+    "Runtime prompt is build_system_prompt_v7_11() (Enriched HDML + Tool Calling only)."
 )
 
 # Legacy compatibility aliases (unused in v7.10 runtime path)
-SYSTEM_PROMPT_CVD = SYSTEM_PROMPT_STREAMING
-SYSTEM_PROMPT_CVD_COMPACT = SYSTEM_PROMPT_STREAMING
+SYSTEM_PROMPT_HDML = SYSTEM_PROMPT_STREAMING
+SYSTEM_PROMPT_HDML_COMPACT = SYSTEM_PROMPT_STREAMING
 
 
 
@@ -940,12 +940,12 @@ class OpenAIStreamingClient:
         스트리밍으로 편집 명령 생성 및 실시간 콜백
 
         Args:
-            html: 문서 CVD JSONL (compact_mode=True면 압축 JSONL) 또는 HTML (use_html=True)
+            html: 문서 HDML JSONL (compact_mode=True면 압축 JSONL) 또는 HTML (use_html=True)
             prompt: 사용자 요청
             on_command: 명령이 파싱될 때마다 호출되는 콜백
             on_progress: 진행 상황 텍스트 콜백 (선택)
-            compact_mode: 압축 모드 사용 여부 (기본값: True, CVD 모드에서만 사용)
-            use_delta: Delta 형식 사용 여부 (기본값: False, CVD 모드)
+            compact_mode: 압축 모드 사용 여부 (기본값: True, HDML 모드에서만 사용)
+            use_delta: Delta 형식 사용 여부 (기본값: False, HDML 모드)
             use_html: HTML 모드 사용 여부 (기본값: False, DocumentView HTML 방식)
 
         Returns:
@@ -992,7 +992,7 @@ class OpenAIStreamingClient:
             # 태그 계층 구조에 맞춘다.
             context_sections, user_request_text = _extract_context_tags(effective_prompt)
 
-            user_message_parts = [f"<ENRICHED_CVD>\n{html}\n</ENRICHED_CVD>"]
+            user_message_parts = [f"<ENRICHED_HDML>\n{html}\n</ENRICHED_HDML>"]
             if context_sections:
                 user_message_parts.append(context_sections)
             user_message_parts.append(f"<USER_REQUEST>\n{user_request_text}\n</USER_REQUEST>")
@@ -1497,7 +1497,7 @@ class OpenAIStreamingClient:
             # ===================================================================
             # RAG 분석/편집 완전 분리 루프
             # 1차 호출에서 search_rag 감지 → analysis loop (검색만) → editing call (편집만)
-            # previous_response_id: CVD 재전송 없이 이전 응답 컨텍스트 재사용
+            # previous_response_id: HDML 재전송 없이 이전 응답 컨텍스트 재사용
             # ===================================================================
             if _pending_initial_rag is not None and _has_rag and use_delta and not self._cancelled:
                 try:

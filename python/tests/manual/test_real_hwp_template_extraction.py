@@ -41,7 +41,7 @@ def _copy_to_safe_temp(source: Path) -> Path:
     return target
 
 
-def _extract_page_texts_from_cvd(extractor) -> dict[int, str]:
+def _extract_page_texts_from_hdml(extractor) -> dict[int, str]:
     page_map: dict[int, list[str]] = {}
     for item in extractor.extracted_elements:
         page = item.get("page")
@@ -54,7 +54,7 @@ def _extract_page_texts_from_cvd(extractor) -> dict[int, str]:
     return {page: " ".join(parts) for page, parts in page_map.items()}
 
 
-class _CVDPageTextParser(HTMLParser):
+class _HDMLPageTextParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.page_stack: list[int | None] = []
@@ -88,51 +88,51 @@ class _CVDPageTextParser(HTMLParser):
         self.page_map.setdefault(page, []).append(text)
 
 
-def _extract_page_texts_from_cvd_markup(cvd_text: str) -> dict[int, str]:
-    parser = _CVDPageTextParser()
-    parser.feed(cvd_text or "")
+def _extract_page_texts_from_hdml_markup(hdml_text: str) -> dict[int, str]:
+    parser = _HDMLPageTextParser()
+    parser.feed(hdml_text or "")
     return {page: " ".join(parts) for page, parts in parser.page_map.items()}
 
 
-def _extract_text_sequence_from_cvd_markup(cvd_text: str) -> list[str]:
+def _extract_text_sequence_from_hdml_markup(hdml_text: str) -> list[str]:
     texts: list[str] = []
-    for text in re.findall(r"<p\b[^>]*>([^<]*)</p>", cvd_text or ""):
+    for text in re.findall(r"<p\b[^>]*>([^<]*)</p>", hdml_text or ""):
         normalized = _normalize_text(text)
         if normalized:
             texts.append(normalized)
     return texts
 
 
-def _extract_fixture_cvd_with_retry(
+def _extract_fixture_hdml_with_retry(
     source_file: Path,
     start_page: int = 2,
     end_page: int = 6,
     attempts: int = 3,
 ) -> tuple[str, list[str], dict[int, str]]:
-    from services.cvd_service import CVDService
+    from services.hdml_service import HDMLService
 
     last_error: Exception | None = None
     for attempt in range(attempts):
         output_dir = Path(tempfile.gettempdir()) / "inserty_real_template_service_test"
         output_dir.mkdir(parents=True, exist_ok=True)
         try:
-            service = CVDService()
-            result = service.extract_single_cvd(str(source_file), str(output_dir))
-            assert result.get("success"), result.get("error", "unknown cvd extraction error")
-            cvd_path = Path(result["cvd_path"])
-            with cvd_path.open("r", encoding="utf-8") as f:
-                cvd_text = f.read()
-            texts = _extract_text_sequence_from_cvd_markup(cvd_text)
-            page_texts = _extract_page_texts_from_cvd_markup(cvd_text)
+            service = HDMLService()
+            result = service.extract_single_hdml(str(source_file), str(output_dir))
+            assert result.get("success"), result.get("error", "unknown hdml extraction error")
+            hdml_path = Path(result["hdml_path"])
+            with hdml_path.open("r", encoding="utf-8") as f:
+                hdml_text = f.read()
+            texts = _extract_text_sequence_from_hdml_markup(hdml_text)
+            page_texts = _extract_page_texts_from_hdml_markup(hdml_text)
             assert all(page in page_texts for page in range(start_page, end_page + 1))
-            return cvd_text, texts, page_texts
+            return hdml_text, texts, page_texts
         except Exception as exc:
             last_error = exc
             if attempt == attempts - 1:
                 raise
             time.sleep(0.8)
         finally:
-            for artifact in output_dir.glob("*.cvd.*"):
+            for artifact in output_dir.glob("*.hdml.*"):
                 try:
                     artifact.unlink()
                 except Exception:
@@ -144,20 +144,20 @@ def _extract_fixture_cvd_with_retry(
 def test_real_hwp_template_extraction_preserves_summary_and_solution_bullets():
     if not DEFAULT_FILE.exists():
         pytest.skip(f"fixture file not found: {DEFAULT_FILE}")
-    cvd_text, _texts, _page_texts = _extract_fixture_cvd_with_retry(DEFAULT_FILE)
+    hdml_text, _texts, _page_texts = _extract_fixture_hdml_with_retry(DEFAULT_FILE)
 
-    assert "□ 창업 아이템 개요(요약)" in cvd_text
-    assert "< 사업추진 일정(협약기간 내) >" in cvd_text
-    assert "2. 실현 가능성(Solution)_창업 아이템의 개발 계획" in cvd_text
+    assert "□ 창업 아이템 개요(요약)" in hdml_text
+    assert "< 사업추진 일정(협약기간 내) >" in hdml_text
+    assert "2. 실현 가능성(Solution)_창업 아이템의 개발 계획" in hdml_text
     assert (
         "※ 아이디어를 제품·서비스로 개발 또는 구체화 하고자 하는 계획(사업기간 내 일정 등)"
         "개발 창업 아이템의 기능·성능의 차별성 및 경쟁력 확보 전략정부지원사업비 집행 계획 기재"
-        in cvd_text
+        in hdml_text
     )
 
-    solution_start = cvd_text.index("2. 실현 가능성(Solution)_창업 아이템의 개발 계획")
-    schedule_start = cvd_text.index("< 사업추진 일정(협약기간 내) >")
-    solution_block = cvd_text[solution_start:schedule_start]
+    solution_start = hdml_text.index("2. 실현 가능성(Solution)_창업 아이템의 개발 계획")
+    schedule_start = hdml_text.index("< 사업추진 일정(협약기간 내) >")
+    solution_block = hdml_text[solution_start:schedule_start]
     assert "◦" in solution_block
     assert solution_block.count("-") >= 3
     assert solution_block.count("◦") >= 2
@@ -170,7 +170,7 @@ def test_real_hwp_and_pdf_match_across_pages_2_to_6():
         pytest.skip(f"fixture file not found: {DEFAULT_PDF_FILE}")
 
     safe_pdf = _copy_to_safe_temp(DEFAULT_PDF_FILE)
-    cvd_text, _texts, page_texts = _extract_fixture_cvd_with_retry(DEFAULT_FILE)
+    hdml_text, _texts, page_texts = _extract_fixture_hdml_with_retry(DEFAULT_FILE)
 
     pypdf = pytest.importorskip("pypdf")
     try:
@@ -249,15 +249,15 @@ def test_real_hwp_and_pdf_match_across_pages_2_to_6():
 
     for page_no, anchors in expected_page_anchors.items():
         pdf_text = pdf_page_texts[page_no]
-        cvd_page_text = page_texts.get(page_no, "")
+        hdml_page_text = page_texts.get(page_no, "")
         assert pdf_text, f"empty pdf text on page {page_no}"
-        assert cvd_page_text, f"empty cvd text on page {page_no}"
+        assert hdml_page_text, f"empty hdml text on page {page_no}"
 
         for anchor in anchors:
             pdf_idx = pdf_text.find(anchor)
-            cvd_idx = cvd_page_text.find(anchor)
+            hdml_idx = hdml_page_text.find(anchor)
             assert pdf_idx != -1, f"missing anchor in pdf page {page_no}: {anchor}"
-            assert cvd_idx != -1, f"missing anchor in cvd page {page_no}: {anchor}"
+            assert hdml_idx != -1, f"missing anchor in hdml page {page_no}: {anchor}"
 
     assert pdf_page_texts[4].count("◦") >= 2
     assert pdf_page_texts[4].count("-") >= 4
@@ -279,7 +279,7 @@ def test_real_hwp_and_pdf_match_across_pages_2_to_6():
     ]
     last_idx = -1
     for anchor in cross_page_anchors:
-        idx = cvd_text.find(anchor)
-        assert idx != -1, f"missing cross-page anchor in cvd: {anchor}"
+        idx = hdml_text.find(anchor)
+        assert idx != -1, f"missing cross-page anchor in hdml: {anchor}"
         assert idx >= last_idx, f"cross-page anchor order broke at {anchor}"
         last_idx = idx

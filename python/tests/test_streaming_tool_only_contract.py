@@ -92,8 +92,8 @@ def test_generate_commands_streaming_forces_tool_only_even_when_legacy_flags_pas
     # v7.11.4: batch tools = [execute_edits, message] (thinking is analysis-phase only)
     assert "execute_edits" in tool_names
     assert "message" in tool_names
-    assert "<ENRICHED_CVD>" in first_call["input"]
-    assert "Enriched CVD" in first_call["instructions"]
+    assert "<ENRICHED_HDML>" in first_call["input"]
+    assert "Enriched HDML" in first_call["instructions"]
 
 
 def test_generate_commands_streaming_enforces_thinking_first_and_message_last(monkeypatch, tmp_path):

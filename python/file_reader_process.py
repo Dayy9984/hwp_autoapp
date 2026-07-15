@@ -2,7 +2,7 @@
 File Reader Process - 별도 프로세스에서 파일 읽기 수행
 
 hwp_com_process.py의 메인 RPC 루프를 blocking하지 않도록
-파일 읽기/CVD 추출을 독립 프로세스에서 처리합니다.
+파일 읽기/HDML 추출을 독립 프로세스에서 처리합니다.
 
 Protocol: JSON-RPC over stdin/stdout (hwp_com_process.py와 동일)
 """
@@ -46,11 +46,11 @@ def handle_request(request: dict) -> dict:
 
         elif method == "readPdfFile":
             try:
-                from services.cvd_service import CVDService
-                cvd_service = CVDService(
-                    lambda level, msg: print(f"[CVD][{level}] {msg}", file=sys.stderr)
+                from services.hdml_service import HDMLService
+                hdml_service = HDMLService(
+                    lambda level, msg: print(f"[HDML][{level}] {msg}", file=sys.stderr)
                 )
-                pdf_result = cvd_service.extract_pdf(params.get("filePath", ""))
+                pdf_result = hdml_service.extract_pdf(params.get("filePath", ""))
                 if pdf_result.get("success"):
                     result["result"] = {
                         "success": True,
@@ -71,12 +71,12 @@ def handle_request(request: dict) -> dict:
                 ext = os.path.splitext(file_path)[1].lower()
 
                 if ext in ['.hwp', '.hwpx']:
-                    from services.cvd_service import CVDService
+                    from services.hdml_service import HDMLService
                     import tempfile
                     import shutil
 
-                    cvd_service = CVDService(
-                        lambda level, msg: print(f"[CVD][{level}] {msg}", file=sys.stderr),
+                    hdml_service = HDMLService(
+                        lambda level, msg: print(f"[HDML][{level}] {msg}", file=sys.stderr),
                         allow_existing_instance=False
                     )
 
@@ -90,19 +90,19 @@ def handle_request(request: dict) -> dict:
 
                     temp_dir = tempfile.mkdtemp(prefix="rag_hwp_")
                     try:
-                        cvd_result = cvd_service.extract_single_cvd(
+                        hdml_result = hdml_service.extract_single_hdml(
                             file_path, temp_dir, progress_callback=progress_callback
                         )
-                        if cvd_result and cvd_result.get("success"):
-                            cvd_path = cvd_result.get("cvd_path")
-                            if cvd_path and os.path.exists(cvd_path):
-                                with open(cvd_path, "r", encoding="utf-8") as f:
+                        if hdml_result and hdml_result.get("success"):
+                            hdml_path = hdml_result.get("hdml_path")
+                            if hdml_path and os.path.exists(hdml_path):
+                                with open(hdml_path, "r", encoding="utf-8") as f:
                                     text_content = f.read()
                                 result["result"] = {"success": True, "text": text_content}
                             else:
-                                result["result"] = {"success": False, "error": "CVD output missing"}
+                                result["result"] = {"success": False, "error": "HDML output missing"}
                         else:
-                            error_message = cvd_result.get("error") if cvd_result else "HWP extraction failed"
+                            error_message = hdml_result.get("error") if hdml_result else "HWP extraction failed"
                             result["result"] = {"success": False, "error": error_message}
                     finally:
                         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -185,9 +185,9 @@ def handle_request(request: dict) -> dict:
             except Exception as e:
                 result["result"] = {"success": False, "error": str(e)}
 
-        elif method == "cvd:extractPair":
+        elif method == "hdml:extractPair":
             try:
-                from services.cvd_service import CVDService
+                from services.hdml_service import HDMLService
                 from services.config import config
 
                 project_id = params.get("projectId")
@@ -202,12 +202,12 @@ def handle_request(request: dict) -> dict:
                     config.set_user_data_path(user_data_path)
 
                     def log_callback(level: str, message: str):
-                        print(f"[CVDService][{level}] {message}", file=sys.stderr)
+                        print(f"[HDMLService][{level}] {message}", file=sys.stderr)
 
                     def progress_callback(progress: float, message: str):
                         event = {
                             "type": "progress",
-                            "event": "cvd:progress",
+                            "event": "hdml:progress",
                             "data": {
                                 "pairId": pair_id,
                                 "progress": int(progress * 100),
@@ -217,8 +217,8 @@ def handle_request(request: dict) -> dict:
                         print(json.dumps(event, ensure_ascii=False))
                         sys.stdout.flush()
 
-                    cvd_service = CVDService(log_callback, allow_existing_instance=False)
-                    result["result"] = cvd_service.extract_pair_cvd(
+                    hdml_service = HDMLService(log_callback, allow_existing_instance=False)
+                    result["result"] = hdml_service.extract_pair_hdml(
                         project_id=project_id,
                         pair_id=pair_id,
                         template_path=template_path,
@@ -226,10 +226,10 @@ def handle_request(request: dict) -> dict:
                         progress_callback=progress_callback
                     )
             except Exception as e:
-                print(f"[CVDService] Error: {str(e)}", file=sys.stderr)
+                print(f"[HDMLService] Error: {str(e)}", file=sys.stderr)
                 result["result"] = {"success": False, "error": str(e)}
 
-        elif method == "cvd:generateDiff":
+        elif method == "hdml:generateDiff":
             try:
                 from services.diff_service import DiffService
                 from services.config import config

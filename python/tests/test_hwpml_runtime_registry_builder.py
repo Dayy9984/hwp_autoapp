@@ -55,7 +55,7 @@ class _FakeExtractor:
         return f' data-page="{int(pos[0]) // 10 + 1}" color="#112233" font-size="11pt"'
 
 
-def test_build_runtime_registry_from_extractor_without_cvd_text():
+def test_build_runtime_registry_from_extractor_without_hdml_text():
     extractor = _FakeExtractor()
     registry, id_to_pos = build_segment_registry_from_extractor(extractor)
 

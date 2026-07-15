@@ -63,10 +63,10 @@ class DocumentProcessor:
         # 문서 뷰 생성기
         self._view_generator: Optional[DocumentViewGenerator] = None
 
-        # CVD 관련 (chat 메서드에서 초기화)
-        self._cvd_adapter = None
-        self._cvd_parser = None
-        self._doc_cvd = None
+        # HDML 관련 (chat 메서드에서 초기화)
+        self._hdml_adapter = None
+        self._hdml_parser = None
+        self._doc_hdml = None
         self._allowed_block_ids = None
         self._table_anchors = None
 
@@ -702,9 +702,9 @@ class DocumentProcessor:
         sys.stdout.flush()
 
 
-    def _map_block_pages(self, hwp, doc_cvd):
+    def _map_block_pages(self, hwp, doc_hdml):
         """
-        CVD 블록의 페이지 번호를 매핑
+        HDML 블록의 페이지 번호를 매핑
 
         - 표 셀 블록: 표의 앵커 페이지 기준
         - 일반 문단 블록: 문단 순회로 페이지 매핑
@@ -744,18 +744,18 @@ class DocumentProcessor:
                         break
 
             # 각 블록에 페이지 번호 설정
-            for block in doc_cvd.blocks.values():
+            for block in doc_hdml.blocks.values():
                 cell_id = block.owner.get("cell_id")
                 if cell_id is not None:
                     # 표 셀 블록 - 소속 표의 페이지
-                    cell = doc_cvd.get_cell(cell_id)
+                    cell = doc_hdml.get_cell(cell_id)
                     if cell:
                         block.page = table_pages.get(cell.table_id, 1)
                 else:
                     # 일반 문단 블록 - 페이지 1로 기본 설정 (문단 순회 필요시 구현)
                     block.page = 1
 
-            print(f"[Python] {len(doc_cvd.blocks)}개 블록 페이지 매핑 완료", file=sys.stderr)
+            print(f"[Python] {len(doc_hdml.blocks)}개 블록 페이지 매핑 완료", file=sys.stderr)
 
         finally:
             # P1: 원래 커서 위치 복원
@@ -768,7 +768,7 @@ class DocumentProcessor:
 
     def _filter_blocks_by_page(
         self,
-        doc_cvd,
+        doc_hdml,
         start_page: int,
         end_page: int
     ) -> tuple:
@@ -782,7 +782,7 @@ class DocumentProcessor:
         filtered_blocks = []
 
         # 각 블록 순회하면서 페이지 범위 체크
-        for block_id, block in doc_cvd.blocks.items():
+        for block_id, block in doc_hdml.blocks.items():
             if hasattr(block, 'page') and start_page <= block.page <= end_page:
                 allowed_block_ids.add(block_id)
                 filtered_blocks.append(block)
@@ -791,7 +791,7 @@ class DocumentProcessor:
         # 압축 포맷: block_id → id 필드로 축약 ("cell-80-para-0" → "80-0")
 
         # 압축 JSONL 생성
-        full_jsonl = self._cvd_parser.to_compact_jsonl(doc_cvd)
+        full_jsonl = self._hdml_parser.to_compact_jsonl(doc_hdml)
 
         # 필터링된 블록 ID만 포함하도록 JSONL 필터링
         import json
@@ -933,11 +933,11 @@ class DocumentProcessor:
                     "error": "문서 내용을 읽을 수 없습니다."
                 }
 
-            # 5. CVD로 파싱 (디폴트)
+            # 5. HDML로 파싱 (디폴트)
             self._send_progress("stage", {"stage": "parsing", "message": "문서 분석 중..."})
-            print(f"[Python] CVD 파싱 중...", file=sys.stderr)
+            print(f"[Python] HDML 파싱 중...", file=sys.stderr)
 
-            # CVD 파서로 파싱
+            # HDML 파서로 파싱
             from pathlib import Path
             import tempfile
             with tempfile.NamedTemporaryFile(mode='w', suffix='.hwpml', delete=False, encoding='utf-8') as f:
@@ -945,21 +945,21 @@ class DocumentProcessor:
                 temp_path = Path(f.name)
 
             try:
-                self._doc_cvd = self._cvd_parser.parse_hwpml(temp_path)
-                print(f"[Python] CVD 파싱 완료: {len(self._doc_cvd.blocks)}개 블록, {len(self._doc_cvd.cells)}개 셀", file=sys.stderr)
+                self._doc_hdml = self._hdml_parser.parse_hwpml(temp_path)
+                print(f"[Python] HDML 파싱 완료: {len(self._doc_hdml.blocks)}개 블록, {len(self._doc_hdml.cells)}개 셀", file=sys.stderr)
             finally:
                 temp_path.unlink()
 
             # 5.5. 각 블록의 페이지 번호 매핑
             self._send_progress("stage", {"stage": "mapping_pages", "message": "페이지 매핑 중..."})
-            self._map_block_pages(hwp, self._doc_cvd)
+            self._map_block_pages(hwp, self._doc_hdml)
 
             # 5.6. 페이지 범위 내 블록만 필터링하여 JSONL 생성
             filtered_jsonl, allowed_block_ids = self._filter_blocks_by_page(
-                self._doc_cvd, actual_start, actual_end
+                self._doc_hdml, actual_start, actual_end
             )
 
-            print(f"[Python] 원본 블록 수: {len(self._doc_cvd.blocks)}, 필터링 후: {len(allowed_block_ids)}개 블록 허용", file=sys.stderr)
+            print(f"[Python] 원본 블록 수: {len(self._doc_hdml.blocks)}, 필터링 후: {len(allowed_block_ids)}개 블록 허용", file=sys.stderr)
             print(f"[Python] 필터링 JSONL 길이: {len(filtered_jsonl)}", file=sys.stderr)
 
             # 편집 허용 블록 ID 저장 (편집 시 범위 체크용)
@@ -967,17 +967,17 @@ class DocumentProcessor:
 
             # JSONL 병합 (필터링된 버전 사용)
             merged_jsonl = filtered_jsonl
-            print(f"[Python] JSONL 길이: {len(merged_jsonl)}, 블록 수: {len(self._doc_cvd.blocks)}", file=sys.stderr)
+            print(f"[Python] JSONL 길이: {len(merged_jsonl)}, 블록 수: {len(self._doc_hdml.blocks)}", file=sys.stderr)
 
-            # CVD 어댑터 초기화 (hwp 객체 업데이트 포함)
-            if self._cvd_adapter is None:
-                self._cvd_adapter = CVDAdapter(hwp)
+            # HDML 어댑터 초기화 (hwp 객체 업데이트 포함)
+            if self._hdml_adapter is None:
+                self._hdml_adapter = HDMLAdapter(hwp)
             else:
                 # hwp 객체가 변경될 수 있으므로 업데이트 (테이블 캐시 무효화)
-                self._cvd_adapter.hwp = hwp
-                self._cvd_adapter._invalidate_table_cache()
-            self._cvd_adapter.set_doc_cvd(self._doc_cvd)
-            self._cvd_adapter.set_parser(self._cvd_parser)
+                self._hdml_adapter.hwp = hwp
+                self._hdml_adapter._invalidate_table_cache()
+            self._hdml_adapter.set_doc_hdml(self._doc_hdml)
+            self._hdml_adapter.set_parser(self._hdml_parser)
 
             # 디버그: HWPML, JSONL 저장
             from utils.logger import log_llm_interaction, log_token_usage, LOG_DIR
@@ -1036,9 +1036,9 @@ class DocumentProcessor:
             else:
                 adapter.stop_track_changes()
 
-            # CVD 어댑터에도 Diff 모드 동기화 (P0: 누락 수정)
-            if self._cvd_adapter is not None:
-                self._cvd_adapter.set_diff_mode(self._diff_mode_enabled)
+            # HDML 어댑터에도 Diff 모드 동기화 (P0: 누락 수정)
+            if self._hdml_adapter is not None:
+                self._hdml_adapter.set_diff_mode(self._diff_mode_enabled)
 
             # 스트리밍 클라이언트
             streaming_client = get_streaming_client(openai_api_key)
@@ -1048,7 +1048,7 @@ class DocumentProcessor:
             messages_collected = []
 
             def on_command(cmd: StreamingCommand):
-                """명령이 파싱될 때마다 호출되는 콜백 (CVD 기반)"""
+                """명령이 파싱될 때마다 호출되는 콜백 (HDML 기반)"""
                 nonlocal edits_count
 
                 if cmd.action == "message":
@@ -1057,12 +1057,12 @@ class DocumentProcessor:
                     self._send_progress("message", {"text": cmd.message})
 
                 elif cmd.action == "edit_document":
-                    # CVD 편집 - 즉시 실행
+                    # HDML 편집 - 즉시 실행
                     # cmd.id는 int(셀 ID) 또는 str(블록 ID, 예: "cell-80-para-0")
 
                     if isinstance(cmd.id, int):
                         # Cell ID → edit_cell() 직접 사용
-                        cell = self._doc_cvd.get_cell(cmd.id)
+                        cell = self._doc_hdml.get_cell(cmd.id)
                         if cell is None:
                             print(f"[Python] 알 수 없는 셀 ID: {cmd.id}", file=sys.stderr)
                             self._send_progress("edit_failed", {
@@ -1075,7 +1075,7 @@ class DocumentProcessor:
                         if cell.blocks and self._allowed_block_ids:
                             first_block_id = cell.blocks[0]
                             if first_block_id not in self._allowed_block_ids:
-                                block = self._doc_cvd.get_block(first_block_id)
+                                block = self._doc_hdml.get_block(first_block_id)
                                 page = getattr(block, 'page', 'unknown') if block else 'unknown'
                                 print(f"[Python] 페이지 범위 외 셀 무시: {cmd.id} (page: {page})", file=sys.stderr)
                                 self._send_progress("edit_skipped", {
@@ -1085,8 +1085,8 @@ class DocumentProcessor:
                                 })
                                 return
 
-                        # CVD adapter로 셀 편집
-                        success = self._cvd_adapter.edit_cell(cmd.id, cmd.content)
+                        # HDML adapter로 셀 편집
+                        success = self._hdml_adapter.edit_cell(cmd.id, cmd.content)
                         edit_mode = "track" if self._diff_mode_enabled else "normal"
 
                         if success:
@@ -1102,7 +1102,7 @@ class DocumentProcessor:
                         block_id = str(cmd.id)
 
                         # 블록 조회
-                        block = self._doc_cvd.get_block(block_id)
+                        block = self._doc_hdml.get_block(block_id)
                         if block is None:
                             print(f"[Python] 알 수 없는 블록 ID: {block_id}", file=sys.stderr)
                             self._send_progress("edit_failed", {
@@ -1122,8 +1122,8 @@ class DocumentProcessor:
                             })
                             return
 
-                        # CVD adapter로 블록 편집
-                        success = self._cvd_adapter.edit_block(block_id, cmd.content)
+                        # HDML adapter로 블록 편집
+                        success = self._hdml_adapter.edit_block(block_id, cmd.content)
                         edit_mode = "track" if self._diff_mode_enabled else "normal"
 
                         if success:
@@ -1136,13 +1136,13 @@ class DocumentProcessor:
                             })
 
                 elif cmd.action == "append_table_row":
-                    # 행 추가 - 즉시 실행 (CVD 기반)
+                    # 행 추가 - 즉시 실행 (HDML 기반)
                     # cmd.id는 셀 ID (int) 또는 블록 ID (str)
 
                     if isinstance(cmd.id, int):
                         # Cell ID → 직접 셀 조회
                         cell_id = cmd.id
-                        cell = self._doc_cvd.get_cell(cell_id)
+                        cell = self._doc_hdml.get_cell(cell_id)
                         if cell is None:
                             print(f"[Python] 행 추가 실패: 알 수 없는 셀 ID {cell_id}", file=sys.stderr)
                             self._send_progress("edit_failed", {
@@ -1155,7 +1155,7 @@ class DocumentProcessor:
                         block_id_for_check = cell.blocks[0] if cell.blocks else None
                         if block_id_for_check and self._allowed_block_ids:
                             if block_id_for_check not in self._allowed_block_ids:
-                                block = self._doc_cvd.get_block(block_id_for_check)
+                                block = self._doc_hdml.get_block(block_id_for_check)
                                 page = getattr(block, 'page', 'unknown') if block else 'unknown'
                                 print(f"[Python] 페이지 범위 외 셀 무시 (행추가): {cell_id}", file=sys.stderr)
                                 self._send_progress("edit_skipped", {
@@ -1167,7 +1167,7 @@ class DocumentProcessor:
                     else:
                         # Block ID (str) → 블록에서 셀 정보 추출
                         block_id = str(cmd.id)
-                        block = self._doc_cvd.get_block(block_id)
+                        block = self._doc_hdml.get_block(block_id)
                         if block is None:
                             print(f"[Python] 행 추가 실패: 잘못된 블록 ID {block_id}", file=sys.stderr)
                             self._send_progress("edit_failed", {
@@ -1186,7 +1186,7 @@ class DocumentProcessor:
                             })
                             return
 
-                        cell = self._doc_cvd.get_cell(cell_id)
+                        cell = self._doc_hdml.get_cell(cell_id)
                         if cell is None:
                             print(f"[Python] 행 추가 실패: 셀 ID {cell_id} 찾을 수 없음", file=sys.stderr)
                             self._send_progress("edit_failed", {
@@ -1206,7 +1206,7 @@ class DocumentProcessor:
                             })
                             return
 
-                    # 행 추가 (기존 adapter 사용 - append_table_row는 CVD adapter에 없음)
+                    # 행 추가 (기존 adapter 사용 - append_table_row는 HDML adapter에 없음)
                     current_row = cell.r0
                     for row_str in cmd.rows:
                         row_cells = row_str.split("|")
@@ -1222,7 +1222,7 @@ class DocumentProcessor:
                                 "cells": len(row_cells)
                             })
 
-            # 스트리밍 실행 (압축 CVD JSONL 전달)
+            # 스트리밍 실행 (압축 HDML JSONL 전달)
             result = streaming_client.generate_commands_streaming(
                 html=merged_jsonl,
                 prompt=final_prompt,
@@ -1388,10 +1388,10 @@ class DocumentProcessor:
                 # Track Changes 끄기
                 connector.stop_track_changes()
 
-            # CVD 어댑터에도 Diff 모드 설정 (P0: 누락 수정)
-            if self._cvd_adapter is not None:
-                self._cvd_adapter.set_diff_mode(enabled)
-                print(f"[Python] CVD 어댑터 Diff 모드: {'ON' if enabled else 'OFF'}", file=sys.stderr)
+            # HDML 어댑터에도 Diff 모드 설정 (P0: 누락 수정)
+            if self._hdml_adapter is not None:
+                self._hdml_adapter.set_diff_mode(enabled)
+                print(f"[Python] HDML 어댑터 Diff 모드: {'ON' if enabled else 'OFF'}", file=sys.stderr)
 
             self._diff_mode_enabled = enabled
             print(f"[Python] Diff 모드: {'ON' if enabled else 'OFF'} (Track Changes)", file=sys.stderr)

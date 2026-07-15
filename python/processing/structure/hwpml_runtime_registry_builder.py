@@ -1,8 +1,8 @@
 """
-Runtime SegmentRegistry builder without CVD text parsing.
+Runtime SegmentRegistry builder without HDML text parsing.
 
-Builds SegmentRegistry directly from CVDExtractor.extracted_elements metadata,
-keeping runtime positions/signatures while avoiding CVD markup dependency in
+Builds SegmentRegistry directly from HDMLExtractor.extracted_elements metadata,
+keeping runtime positions/signatures while avoiding HDML markup dependency in
 prepare_context graph flow.
 """
 
@@ -97,7 +97,7 @@ def build_segment_registry_from_extractor(extractor: Any) -> Tuple[SegmentRegist
     Build runtime SegmentRegistry from extractor.extracted_elements.
 
     Args:
-        extractor: CVDExtractor-like instance after extract_elements() execution
+        extractor: HDMLExtractor-like instance after extract_elements() execution
 
     Returns:
         (SegmentRegistry, id_to_pos)

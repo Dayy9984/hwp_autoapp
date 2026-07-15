@@ -7,7 +7,7 @@ A *case* describes one form to run through the edit -> verify pipeline:
       "name": str,                         # human label (unique within a run)
       "template_hwp_path": str,            # absolute path to the template HWP/HWPX
       "diff_json_path": str | None,        # ground truth: diff.json (preferred)
-      "filled_cvd_path": str | None,       # fallback ground truth: filled.cvd.md
+      "filled_hdml_path": str | None,       # fallback ground truth: filled.hdml.md
       "instruction": str | None,           # natural-language intent (MODE B user_intent)
       "source": str,                       # provenance tag (fs / db / manifest)
     }
@@ -17,7 +17,7 @@ Sources
 1. Filesystem scan of ``template_pairs`` directories. A configurable root is
    scanned for ``template_pairs/<pairId>/`` dirs (or a single such dir, or a
    parent that *contains* a ``template_pairs`` folder). Each pair dir must hold
-   a template HWP plus a ground-truth file (``diff.json`` or ``filled.cvd.md``).
+   a template HWP plus a ground-truth file (``diff.json`` or ``filled.hdml.md``).
 2. SQLite DB (the app's better-sqlite3 file is standard SQLite). The
    ``template_pairs`` table gives ``template_rel_path`` resolved against the
    project base ``<userData>/projects/<project_id>/``.
@@ -38,7 +38,7 @@ from typing import Any, Dict, List, Optional
 # Candidate template file names inside a pair dir (first match wins).
 _TEMPLATE_NAMES = ("template.hwp", "template.hwpx", "template.HWP", "template.HWPX")
 _DIFF_NAME = "diff.json"
-_FILLED_CVD_NAME = "filled.cvd.md"
+_FILLED_HDML_NAME = "filled.hdml.md"
 
 # R2 / D1 (Cloudflare) source for real user HWP forms.
 _R2_BUCKET = "inserty-ai"
@@ -77,9 +77,9 @@ def _pair_case_from_dir(pair_dir: str, source: str = "fs") -> Optional[Dict[str,
         return None
 
     diff_path = os.path.join(pair_dir, _DIFF_NAME)
-    filled_cvd_path = os.path.join(pair_dir, _FILLED_CVD_NAME)
+    filled_hdml_path = os.path.join(pair_dir, _FILLED_HDML_NAME)
     has_diff = os.path.isfile(diff_path)
-    has_filled = os.path.isfile(filled_cvd_path)
+    has_filled = os.path.isfile(filled_hdml_path)
     if not has_diff and not has_filled:
         return None
 
@@ -87,7 +87,7 @@ def _pair_case_from_dir(pair_dir: str, source: str = "fs") -> Optional[Dict[str,
         "name": os.path.basename(pair_dir),
         "template_hwp_path": template_hwp,
         "diff_json_path": diff_path if has_diff else None,
-        "filled_cvd_path": filled_cvd_path if has_filled else None,
+        "filled_hdml_path": filled_hdml_path if has_filled else None,
         "instruction": _read_instruction(pair_dir),
         "source": source,
     }
@@ -241,7 +241,7 @@ def load_from_manifest(manifest_path: str) -> List[Dict[str, Any]]:
           {
             "name": "case-1",
             "template_hwp_path": "C:/.../template.hwp",
-            "diff_json_path": "C:/.../diff.json",      # or filled_cvd_path
+            "diff_json_path": "C:/.../diff.json",      # or filled_hdml_path
             "instruction": "..."                         # optional
           }, ...
         ]
@@ -276,12 +276,12 @@ def load_from_manifest(manifest_path: str) -> List[Dict[str, Any]]:
         if not template:
             continue
         diff = _resolve(raw.get("diff_json_path") or raw.get("diff_path"))
-        filled = _resolve(raw.get("filled_cvd_path") or raw.get("filled_cvd"))
+        filled = _resolve(raw.get("filled_hdml_path") or raw.get("filled_hdml"))
         cases.append({
             "name": raw.get("name") or f"manifest-case-{idx + 1}",
             "template_hwp_path": template,
             "diff_json_path": diff,
-            "filled_cvd_path": filled,
+            "filled_hdml_path": filled,
             "instruction": raw.get("instruction"),
             "source": "manifest",
         })
@@ -408,7 +408,7 @@ def load_from_r2(
         instruction: natural-language intent (default: fill blank cells).
         dest_dir: where to download (a fresh temp dir if None).
 
-    Cases have NO ground truth (``diff_json_path`` / ``filled_cvd_path`` = None),
+    Cases have NO ground truth (``diff_json_path`` / ``filled_hdml_path`` = None),
     so they are only meaningful for MODE full / MODE B (vision) verdicts.
     """
     if not keys:
@@ -438,7 +438,7 @@ def load_from_r2(
             "name": name,
             "template_hwp_path": local,
             "diff_json_path": None,
-            "filled_cvd_path": None,
+            "filled_hdml_path": None,
             "instruction": instr,
             "source": "r2",
             "r2_key": key,

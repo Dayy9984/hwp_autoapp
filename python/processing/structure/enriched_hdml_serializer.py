@@ -1,7 +1,7 @@
-"""Enriched CVD Serializer (v7.11).
+"""Enriched HDML Serializer (v7.11).
 
 Converts a Document Graph dict (from hwpml_direct_graph_builder) into
-an HTML-like CVD markup string with style attributes.  This format is
+an HTML-like HDML markup string with style attributes.  This format is
 designed for LLM consumption: the LLM infers cell roles (label / input
 / guide / forbidden) from position, content, and style cues rather than
 relying on pre-classified ``role`` values.
@@ -16,11 +16,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from xml.sax.saxutils import escape as _xml_escape
 
 
-def serialize_enriched_cvd(
+def serialize_enriched_hdml(
     graph: Dict[str, Any],
     page_range: Optional[Tuple[int, int]] = None,
 ) -> str:
-    """Return Enriched CVD markup for the given Document Graph dict.
+    """Return Enriched HDML markup for the given Document Graph dict.
 
     Parameters
     ----------
@@ -33,7 +33,7 @@ def serialize_enriched_cvd(
     Returns
     -------
     str
-        Enriched CVD markup string.
+        Enriched HDML markup string.
     """
     nodes: List[Dict[str, Any]] = graph.get("nodes") or []
     edges: List[Dict[str, Any]] = graph.get("edges") or []
@@ -113,7 +113,7 @@ def serialize_enriched_cvd(
     ordered_items.sort(key=lambda x: x[0])
 
     # ------------------------------------------------------------------
-    # 5. Emit Enriched CVD markup
+    # 5. Emit Enriched HDML markup
     # ------------------------------------------------------------------
     parts: List[str] = []
     parts.append(_page_range_header(page_range))

@@ -109,7 +109,7 @@ class TestScoreAgainstDiff:
         assert result["cells"][0]["verdict"] == "correct"
 
     def test_string_cell_ids_match_int_diff_ids(self):
-        # applied_cells keys may arrive as strings (from JSON/CVD parse)
+        # applied_cells keys may arrive as strings (from JSON/HDML parse)
         diff = [_change(10, 10, "값A")]
         applied = {"10": "값A"}
         result = score_against_diff(applied, diff)

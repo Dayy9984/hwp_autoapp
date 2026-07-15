@@ -52,7 +52,7 @@ HWP 양식(신청서·계획서·보고서)의 표·셀 구조에 맞춰 **AI가
 <img src="docs/images/architecture.png" alt="Architecture" width="100%" />
 
 1. **한글 문서 추출** — Python이 HWP COM에서 문서 구조를 토큰 효율적인 HTML-like 마크업으로 직렬화 (`<table>`, `<td id="N">`, `<p id="N">` + 속성)
-2. **AI 분석** — 사용자 요청과 CVD를 함께 LLM에 전달. 모델이 셀 ID 기준 편집 명령(`replace_cell_content`, `replace_paragraph` 등) 생성
+2. **AI 분석** — 사용자 요청과 HDML를 함께 LLM에 전달. 모델이 셀 ID 기준 편집 명령(`replace_cell_content`, `replace_paragraph` 등) 생성
 3. **실시간 적용** — Python이 명령을 받아 HWP에 즉시 반영. 진행 상황이 UI에 스트리밍됨
 4. **변경 추적** — 모든 변경은 HWP의 Track Changes로 기록되어 사용자가 검토·승인·거절 가능
 
@@ -214,10 +214,10 @@ insertyai/
 │   │   └── edit_tools_schema.py    #   도구 스키마 (execute_edits 등)
 │   ├── modification/               # 문서 수정 엔진 (content_modifier 등)
 │   ├── parsing/                    # HWPML 파서
-│   ├── processing/                 # CVD 추출 파이프라인
-│   │   ├── extraction/             #   CVD 추출기
+│   ├── processing/                 # HDML 추출 파이프라인
+│   │   ├── extraction/             #   HDML 추출기
 │   │   ├── conversion/             #   마크업 변환기
-│   │   ├── structure/              #   문서 구조 빌더 (Enriched CVD)
+│   │   ├── structure/              #   문서 구조 빌더 (Enriched HDML)
 │   │   └── detection/              #   form/table 감지
 │   ├── readers/                    # PDF/Word/Excel 파일 리더
 │   ├── services/                   # 파일 검색·RAG·diff·세션

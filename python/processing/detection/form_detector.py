@@ -915,10 +915,10 @@ class FormDetector:
         extracted_elements: List[Dict[str, Any]],
         pos_to_shape: Dict[Tuple[int, int, int], Dict[str, Any]],
     ) -> List[FormRegionInfo]:
-        """CVD 스캔 결과를 재사용해 양식 영역 감지 (추가 스캔 없이).
+        """HDML 스캔 결과를 재사용해 양식 영역 감지 (추가 스캔 없이).
 
         Args:
-            extracted_elements: CVDExtractor가 만든 스캔 요소 리스트
+            extracted_elements: HDMLExtractor가 만든 스캔 요소 리스트
             pos_to_shape: pos -> {char_shape, para_shape} 매핑
 
         Returns:

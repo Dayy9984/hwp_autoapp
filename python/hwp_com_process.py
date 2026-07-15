@@ -115,14 +115,14 @@ from engine.state.session_state import (
 from processing.structure.view_generator import DocumentViewGenerator
 from processing.structure.view_structures import DocumentView, Element
 from processing.structure.segment_registry import SegmentRegistry as DocumentBlockManager
-from processing.structure.enriched_cvd_serializer import serialize_enriched_cvd
+from processing.structure.enriched_hdml_serializer import serialize_enriched_hdml
 from processing.structure.hwpml_direct_graph_builder import (
     build_document_graph_from_hwpml,
 )
 from processing.structure.hwpml_runtime_registry_builder import (
     build_segment_registry_from_extractor,
 )
-from processing.extraction.cvd_extractor import CVDExtractor
+from processing.extraction.hdml_extractor import HDMLExtractor
 from processing.detection.form_detector import FormDetector
 from modification.content_modifier import ContentModifier
 from llm.client import get_llm_client
@@ -137,9 +137,9 @@ from api.track_changes_api import (
     apply_selected_changes,
     reject_selected_changes,
 )
-# Phase 4: CVD/Diff 서비스
+# Phase 4: HDML/Diff 서비스
 from services.config import config
-from services.cvd_service import CVDService
+from services.hdml_service import HDMLService
 from services.diff_service import DiffService
 
 
@@ -180,8 +180,8 @@ class DocumentProcessor:
         # ContentModifier 인스턴스 (기존 편집기)
         self._content_modifier: Optional[ContentModifier] = None
 
-        # CVDExtractor 인스턴스 (CVD 형식 문서 추출)
-        self._cvd_extractor: Optional[CVDExtractor] = None
+        # HDMLExtractor 인스턴스 (HDML 형식 문서 추출)
+        self._hdml_extractor: Optional[HDMLExtractor] = None
 
         # 문서 뷰 생성기 (HTML 형식 - 하위 호환)
         self._view_generator: Optional[DocumentViewGenerator] = None
@@ -231,7 +231,7 @@ class DocumentProcessor:
 
                 # ✅ 컴포넌트 초기화 (RPC 서버 오류 방지)
                 print(f"[DocumentProcessor] PID 변경으로 인한 컴포넌트 초기화", file=sys.stderr)
-                self._cvd_extractor = None
+                self._hdml_extractor = None
                 self._content_modifier = None
                 self._form_detector = None
                 self._current_doc_view = None
@@ -265,7 +265,7 @@ class DocumentProcessor:
 
                 # ✅ 컴포넌트 초기화 (RPC 서버 오류 방지)
                 print(f"[DocumentProcessor] PID 변경으로 인한 컴포넌트 초기화", file=sys.stderr)
-                self._cvd_extractor = None
+                self._hdml_extractor = None
                 self._content_modifier = None
                 self._form_detector = None
                 self._current_doc_view = None
@@ -446,17 +446,17 @@ class DocumentProcessor:
 
         return self._content_modifier
 
-    def _ensure_cvd_extractor(self) -> CVDExtractor:
-        """CVDExtractor 초기화 (lazy, connector 변경 시 재생성)"""
+    def _ensure_hdml_extractor(self) -> HDMLExtractor:
+        """HDMLExtractor 초기화 (lazy, connector 변경 시 재생성)"""
         connector = self._ensure_connector()
 
         # connector의 hwp가 변경되었으면 extractor 재생성 (stale COM 방지)
-        if self._cvd_extractor is not None:
+        if self._hdml_extractor is not None:
             current_hwp = connector.hwp
-            if current_hwp is not self._cvd_extractor.hwp:
-                self._cvd_extractor = None
+            if current_hwp is not self._hdml_extractor.hwp:
+                self._hdml_extractor = None
 
-        if self._cvd_extractor is None:
+        if self._hdml_extractor is None:
             def log_fn(level, msg):
                 # ERROR만 출력, INFO/DEBUG는 무시
                 # 파라미터 순서 처리: (level, msg) 또는 (msg, level) 모두 지원
@@ -464,14 +464,14 @@ class DocumentProcessor:
                     # (msg, level) 순서로 호출된 경우 - 순서 바꾸기
                     level, msg = msg, level
                 if level == "ERROR":
-                    print(f"[CVDExtractor][{level}] {msg}", file=sys.stderr)
+                    print(f"[HDMLExtractor][{level}] {msg}", file=sys.stderr)
 
-            self._cvd_extractor = CVDExtractor(
+            self._hdml_extractor = HDMLExtractor(
                 hwp=connector,
                 log_to_main=log_fn,
             )
 
-        return self._cvd_extractor
+        return self._hdml_extractor
 
     def _ensure_form_detector(self) -> FormDetector:
         """FormDetector 초기화 (lazy)"""
@@ -960,8 +960,8 @@ class DocumentProcessor:
                 if hasattr(self._content_modifier, "reset_runtime_state"):
                     self._content_modifier.reset_runtime_state()
 
-            if self._cvd_extractor is not None and hasattr(self._cvd_extractor, "reset_cache"):
-                self._cvd_extractor.reset_cache()
+            if self._hdml_extractor is not None and hasattr(self._hdml_extractor, "reset_cache"):
+                self._hdml_extractor.reset_cache()
 
             try:
                 import gc
@@ -1547,8 +1547,8 @@ class DocumentProcessor:
         except Exception as e:
             return {"success": False, "error": str(e), "trace": traceback.format_exc()}
 
-    def extract_cvd(self, page_range: Optional[dict] = None) -> dict:
-        """이전 버전 호환: CVD 추출"""
+    def extract_hdml(self, page_range: Optional[dict] = None) -> dict:
+        """이전 버전 호환: HDML 추출"""
         try:
             connector = self._ensure_connector()
             hwp = connector.hwp
@@ -1580,27 +1580,27 @@ class DocumentProcessor:
             if end_page is None:
                 end_page = start_page
 
-            extractor = self._ensure_cvd_extractor()
-            result = extractor.extract_cvd({
+            extractor = self._ensure_hdml_extractor()
+            result = extractor.extract_hdml({
                 "start": int(start_page),
                 "end": int(end_page),
                 "current_page": current_page,
             })
 
             if not result:
-                return {"success": False, "error": "CVD 추출 실패"}
+                return {"success": False, "error": "HDML 추출 실패"}
 
-            cvd_text, id_to_pos = result
+            hdml_text, id_to_pos = result
 
             try:
-                block_manager = DocumentBlockManager((cvd_text, id_to_pos))
+                block_manager = DocumentBlockManager((hdml_text, id_to_pos))
                 store_runtime_segment_manager(block_manager)
             except Exception:
                 pass
 
             return {
                 "success": True,
-                "cvd": cvd_text,
+                "hdml": hdml_text,
                 "id_to_pos": id_to_pos,
             }
 
@@ -1609,7 +1609,7 @@ class DocumentProcessor:
 
     def _extract_hwpml_saveblock_for_page_range(
         self,
-        extractor: Optional[CVDExtractor],
+        extractor: Optional[HDMLExtractor],
         start_page: int,
         end_page: int,
     ) -> str:
@@ -1672,7 +1672,7 @@ class DocumentProcessor:
             self._connector = None
 
         # 바인딩 변경 시 종속 객체 초기화 (stale COM 객체 방지)
-        self._cvd_extractor = None
+        self._hdml_extractor = None
         self._content_modifier = None
         self._form_detector = None
 
@@ -3578,7 +3578,7 @@ class DocumentProcessor:
         doc_type: Optional[str] = None,
         request_id: Optional[str] = None
     ) -> dict:
-        """CVD 기반 문서 컨텍스트 생성 (Agent Process용)
+        """HDML 기반 문서 컨텍스트 생성 (Agent Process용)
 
         Agent Child Process가 LLM을 호출하기 전에 문서 컨텍스트를 준비합니다.
         프로세스 흐름: Main Process → COM Process (prepare_context) → Agent Process (LLM)
@@ -3595,7 +3595,7 @@ class DocumentProcessor:
         Returns:
             {
                 "success": bool,
-                "html": str,  # CVD 텍스트 (JSONL 아님)
+                "html": str,  # HDML 텍스트 (JSONL 아님)
                 "prompt": str,  # 최종 프롬프트 (참조 자료 포함)
                 "context_id": str,  # 세션 ID
                 "allowed_elements": list[int],  # 편집 허용 element ID 목록
@@ -3684,9 +3684,9 @@ class DocumentProcessor:
                 actual_start = 1
                 actual_end = 5
 
-            # 4. 페이지 범위 요소 추출 (CVD 텍스트 미사용)
+            # 4. 페이지 범위 요소 추출 (HDML 텍스트 미사용)
             self._send_progress("stage", {"stage": "reading", "message": "문서 읽는 중..."})
-            extractor = self._ensure_cvd_extractor()
+            extractor = self._ensure_hdml_extractor()
             try:
                 extractor.reset_cache()
             except Exception:
@@ -3758,8 +3758,8 @@ class DocumentProcessor:
                         page_range=(actual_start, actual_end),
                         page_by_pos=page_by_pos or None,
                     )
-                    # Enriched CVD: 토큰 효율적 HTML-like 마크업
-                    document_graph_json = serialize_enriched_cvd(
+                    # Enriched HDML: 토큰 효율적 HTML-like 마크업
+                    document_graph_json = serialize_enriched_hdml(
                         document_graph,
                         page_range=(actual_start, actual_end),
                     )
@@ -3820,9 +3820,9 @@ class DocumentProcessor:
             except Exception as _diag_err:
                 print(f"[Python] diagonal child exclusion error: {_diag_err}", file=sys.stderr)
 
-            # 7. 이전 CVD 필드 유지 (LLM 입력 미사용)
+            # 7. 이전 HDML 필드 유지 (LLM 입력 미사용)
             html_content = ""
-            cvd_text = ""
+            hdml_text = ""
 
             # 8. 참조 자료 처리
             final_prompt = prompt
@@ -3865,9 +3865,9 @@ class DocumentProcessor:
 
             return {
                 "success": True,
-                "html": html_content,  # CVD (스타일 속성 포함)
-                "cvd": html_content,
-                "cvd_raw": cvd_text,
+                "html": html_content,  # HDML (스타일 속성 포함)
+                "hdml": html_content,
+                "hdml_raw": hdml_text,
                 "document_graph_json": document_graph_json,
                 "prompt": final_prompt,
                 "context_id": context_id,
@@ -4090,7 +4090,7 @@ class DocumentProcessor:
                     "error": f"Block type '{block_type}' not allowed for {method_type}",
                 }
 
-            # CVD F/D 명령 처리
+            # HDML F/D 명령 처리
             if method_type in ("replace", "delete"):
                 if not old_text:
                     return {"success": False, "error": "Missing old_text for replace/delete"}
@@ -6142,12 +6142,12 @@ def handle_match_template_pair(params: dict) -> dict:
 
 
 # ============================================================
-# Phase 4: CVD 추출 및 Diff 핸들러 함수
+# Phase 4: HDML 추출 및 Diff 핸들러 함수
 # ============================================================
 
-def handle_cvd_extract_pair(params: dict) -> dict:
+def handle_hdml_extract_pair(params: dict) -> dict:
     """
-    Template Pair CVD 추출
+    Template Pair HDML 추출
 
     Args:
         params: {
@@ -6161,8 +6161,8 @@ def handle_cvd_extract_pair(params: dict) -> dict:
     Returns:
         {
             success: bool,
-            template_cvd_path: str,
-            filled_cvd_path: str,
+            template_hdml_path: str,
+            filled_hdml_path: str,
             error?: str
         }
     """
@@ -6181,14 +6181,14 @@ def handle_cvd_extract_pair(params: dict) -> dict:
 
         # 로그 콜백
         def log_callback(level: str, message: str):
-            print(f"[CVDService][{level}] {message}", file=sys.stderr)
+            print(f"[HDMLService][{level}] {message}", file=sys.stderr)
 
         # 진행 콜백 (이벤트 발생)
         def progress_callback(progress: float, message: str):
             # JSON-RPC progress 이벤트 전송
             event = {
                 "type": "progress",
-                "event": "cvd:progress",
+                "event": "hdml:progress",
                 "data": {
                     "pairId": pair_id,
                     "progress": int(progress * 100),
@@ -6198,11 +6198,11 @@ def handle_cvd_extract_pair(params: dict) -> dict:
             print(json.dumps(event, ensure_ascii=False))
             sys.stdout.flush()
 
-        # CVD 서비스 인스턴스
-        cvd_service = CVDService(log_callback, allow_existing_instance=False)
+        # HDML 서비스 인스턴스
+        hdml_service = HDMLService(log_callback, allow_existing_instance=False)
 
-        # CVD 추출 실행
-        result = cvd_service.extract_pair_cvd(
+        # HDML 추출 실행
+        result = hdml_service.extract_pair_hdml(
             project_id=project_id,
             pair_id=pair_id,
             template_path=template_path,
@@ -6213,13 +6213,13 @@ def handle_cvd_extract_pair(params: dict) -> dict:
         return result
 
     except Exception as e:
-        print(f"[CVDService] Error: {str(e)}", file=sys.stderr)
+        print(f"[HDMLService] Error: {str(e)}", file=sys.stderr)
         return {"success": False, "error": str(e)}
 
 
-def handle_cvd_generate_diff(params: dict) -> dict:
+def handle_hdml_generate_diff(params: dict) -> dict:
     """
-    CVD Diff 생성
+    HDML Diff 생성
 
     Args:
         params: {
@@ -6735,11 +6735,11 @@ def handle_request(processor: DocumentProcessor, request: dict) -> dict:
             )
 
         elif method == "readPdfFile":
-            # PDF 파일 읽기 (CVDService의 extract_pdf 사용)
+            # PDF 파일 읽기 (HDMLService의 extract_pdf 사용)
             try:
-                from services.cvd_service import CVDService
-                cvd_service = CVDService(lambda level, msg: print(f"[CVD][{level}] {msg}", file=sys.stderr))
-                pdf_result = cvd_service.extract_pdf(params.get("filePath", ""))
+                from services.hdml_service import HDMLService
+                hdml_service = HDMLService(lambda level, msg: print(f"[HDML][{level}] {msg}", file=sys.stderr))
+                pdf_result = hdml_service.extract_pdf(params.get("filePath", ""))
                 if pdf_result.get("success"):
                     result["result"] = {
                         "success": True,
@@ -6758,13 +6758,13 @@ def handle_request(processor: DocumentProcessor, request: dict) -> dict:
                 ext = os.path.splitext(file_path)[1].lower()
                 
                 if ext in ['.hwp', '.hwpx']:
-                    # HWP/HWPX: CVD 로직으로 텍스트 추출
-                    from services.cvd_service import CVDService
+                    # HWP/HWPX: HDML 로직으로 텍스트 추출
+                    from services.hdml_service import HDMLService
                     import tempfile
                     import shutil
 
-                    cvd_service = CVDService(
-                        lambda level, msg: print(f"[CVD][{level}] {msg}", file=sys.stderr),
+                    hdml_service = HDMLService(
+                        lambda level, msg: print(f"[HDML][{level}] {msg}", file=sys.stderr),
                         allow_existing_instance=False  # 바인딩된 문서 보호
                     )
 
@@ -6779,17 +6779,17 @@ def handle_request(processor: DocumentProcessor, request: dict) -> dict:
 
                     temp_dir = tempfile.mkdtemp(prefix="rag_hwp_")
                     try:
-                        cvd_result = cvd_service.extract_single_cvd(file_path, temp_dir, progress_callback=progress_callback)
-                        if cvd_result and cvd_result.get("success"):
-                            cvd_path = cvd_result.get("cvd_path")
-                            if cvd_path and os.path.exists(cvd_path):
-                                with open(cvd_path, "r", encoding="utf-8") as f:
+                        hdml_result = hdml_service.extract_single_hdml(file_path, temp_dir, progress_callback=progress_callback)
+                        if hdml_result and hdml_result.get("success"):
+                            hdml_path = hdml_result.get("hdml_path")
+                            if hdml_path and os.path.exists(hdml_path):
+                                with open(hdml_path, "r", encoding="utf-8") as f:
                                     text_content = f.read()
                                 result["result"] = {"success": True, "text": text_content}
                             else:
-                                result["result"] = {"success": False, "error": "CVD output missing"}
+                                result["result"] = {"success": False, "error": "HDML output missing"}
                         else:
-                            error_message = cvd_result.get("error") if cvd_result else "HWP extraction failed"
+                            error_message = hdml_result.get("error") if hdml_result else "HWP extraction failed"
                             result["result"] = {"success": False, "error": error_message}
                     finally:
                         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -6982,8 +6982,8 @@ def handle_request(processor: DocumentProcessor, request: dict) -> dict:
                 params.get("contextId")
             )
 
-        elif method == "extract_cvd":
-            result["result"] = processor.extract_cvd(params)
+        elif method == "extract_hdml":
+            result["result"] = processor.extract_hdml(params)
 
         elif method == "extract_document":
             inner_method = (
@@ -6991,22 +6991,22 @@ def handle_request(processor: DocumentProcessor, request: dict) -> dict:
                 or params.get("method_type")
                 or params.get("action")
             )
-            if inner_method == "extract_cvd":
-                result["result"] = processor.extract_cvd(params)
+            if inner_method == "extract_hdml":
+                result["result"] = processor.extract_hdml(params)
             else:
                 result["error"] = f"Unknown extract_document method: {inner_method}"
 
         # ============================================================
-        # Phase 4: CVD 추출 및 Diff 생성
+        # Phase 4: HDML 추출 및 Diff 생성
         # ============================================================
 
-        elif method == "cvd:extractPair":
-            # Template Pair CVD 추출
-            result["result"] = handle_cvd_extract_pair(params)
+        elif method == "hdml:extractPair":
+            # Template Pair HDML 추출
+            result["result"] = handle_hdml_extract_pair(params)
 
-        elif method == "cvd:generateDiff":
+        elif method == "hdml:generateDiff":
             # Diff 생성
-            result["result"] = handle_cvd_generate_diff(params)
+            result["result"] = handle_hdml_generate_diff(params)
 
         # ============================================================
         # Phase 5: RAG 인덱싱/쿼리
@@ -7083,7 +7083,7 @@ def handle_request(processor: DocumentProcessor, request: dict) -> dict:
             result["result"] = {
                 "success": True,
                 "versions": [
-                    {"id": "v7_11", "name": "v7.11", "description": "Enriched CVD + LLM-driven cell role reasoning"},
+                    {"id": "v7_11", "name": "v7.11", "description": "Enriched HDML + LLM-driven cell role reasoning"},
                 ]
             }
 

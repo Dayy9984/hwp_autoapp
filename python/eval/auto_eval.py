@@ -87,7 +87,7 @@ def _open_headless_processor(template_hwp_path: str):
     Returns ``(processor, connector, hwp, temp_copy_path)``. Raises on failure
     (the caller wraps per-case so a bad case does not abort the whole run).
 
-    This mirrors services.cvd_service.CVDService.extract_single_cvd: a fresh
+    This mirrors services.hdml_service.HDMLService.extract_single_hdml: a fresh
     ``Hwp(new=True, visible=False)`` instance (real pyhwpx object with
     open/save_as/quit/init_scan), wrapped in the project's HwpConnector and
     driven through the *real* prepare_context / execute_delta code paths.
@@ -133,7 +133,7 @@ def _open_headless_processor(template_hwp_path: str):
     # (document_connector._initialize_from_binder), so connector.hwp exposes
     # editor methods like InsertText / SelectAll that
     # content_modifier.clear_cell_content calls, AND COM proxies like
-    # InitScan(Range=...) that the CVD extractor calls.
+    # InitScan(Range=...) that the HDML extractor calls.
     #
     # The harness here holds a pyhwpx ``Hwp`` (itself a wrapper over the raw COM
     # object). Two distinct objects matter:
@@ -179,18 +179,18 @@ def _open_headless_processor(template_hwp_path: str):
 def _extract_applied_cells(processor) -> Dict[int, str]:
     """Re-extract post-edit cell texts as ``{cell_id: text}``.
 
-    Reuses the processor's extract_cvd (CVDExtractor) + diff_service.CVDParser,
-    so no CVD parsing or extraction logic is reimplemented here.
+    Reuses the processor's extract_hdml (HDMLExtractor) + diff_service.HDMLParser,
+    so no HDML parsing or extraction logic is reimplemented here.
     """
-    from services.diff_service import CVDParser
+    from services.diff_service import HDMLParser
 
-    res = processor.extract_cvd()
+    res = processor.extract_hdml()
     if not isinstance(res, dict) or not res.get("success"):
-        raise RuntimeError(f"extract_cvd failed: {res}")
-    cvd_text = res.get("cvd") or ""
+        raise RuntimeError(f"extract_hdml failed: {res}")
+    hdml_text = res.get("hdml") or ""
 
-    parser = CVDParser()
-    blocks = parser.parse(cvd_text)
+    parser = HDMLParser()
+    blocks = parser.parse(hdml_text)
 
     cells: Dict[int, str] = {}
     for block in blocks:
@@ -429,7 +429,7 @@ _APPLY_ACTIONS = {
 
 def _stream_codex_edits(
     processor,
-    cvd_html: str,
+    hdml_html: str,
     instruction: str,
     context_id: Optional[str],
     token: str,
@@ -490,7 +490,7 @@ def _stream_codex_edits(
     def _run_stream() -> "tuple":
         try:
             res = client.generate_commands_streaming(
-                html=cvd_html,
+                html=hdml_html,
                 prompt=instruction,
                 on_command=on_command,
                 use_delta=True,
@@ -653,31 +653,31 @@ def _run_case_full(
             raise RuntimeError(f"prepare_context failed: {prep}")
         context_id = prep.get("context_id")
         # The app feeds document_graph_json to the LLM (electron/main/index.ts
-        # docContent = document_graph_json). Fall back to cvd/html for older builds.
-        cvd_html = (
+        # docContent = document_graph_json). Fall back to hdml/html for older builds.
+        hdml_html = (
             prep.get("document_graph_json")
-            or prep.get("cvd")
+            or prep.get("hdml")
             or prep.get("html")
             or ""
         )
-        if isinstance(cvd_html, (dict, list)):
+        if isinstance(hdml_html, (dict, list)):
             import json as _json
-            cvd_html = _json.dumps(cvd_html, ensure_ascii=False)
-        record["cvd_chars"] = len(cvd_html)
-        record["cvd_source"] = (
+            hdml_html = _json.dumps(hdml_html, ensure_ascii=False)
+        record["hdml_chars"] = len(hdml_html)
+        record["hdml_source"] = (
             "document_graph_json" if prep.get("document_graph_json")
-            else ("cvd" if prep.get("cvd") else ("html" if prep.get("html") else "none"))
+            else ("hdml" if prep.get("hdml") else ("html" if prep.get("html") else "none"))
         )
         record["allowed_elements"] = len(prep.get("allowed_elements") or [])
         # The final prompt from prepare_context already wraps reference material.
         effective_instruction = prep.get("prompt") or instruction
-        if not cvd_html:
-            raise RuntimeError("prepare_context returned empty CVD payload "
-                               "(document_graph_json/cvd/html all empty)")
+        if not hdml_html:
+            raise RuntimeError("prepare_context returned empty HDML payload "
+                               "(document_graph_json/hdml/html all empty)")
 
         # --- codex LLM generates edits, applied in-process via execute_delta ---
         llm = _stream_codex_edits(
-            processor, cvd_html, effective_instruction, context_id,
+            processor, hdml_html, effective_instruction, context_id,
             codex_token, codex_account_id or "", edit_model,
             apply_budget_s=apply_budget_s, max_apply_ops=max_apply_ops,
         )

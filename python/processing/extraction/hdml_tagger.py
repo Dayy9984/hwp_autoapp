@@ -1,8 +1,8 @@
 """
-CVD 타입 태깅 유틸리티
+HDML 타입 태깅 유틸리티
 
-LLM이 셀/문단/리스트 ID를 혼동하지 않도록 CVD 텍스트를 명시적 타입 태그로 변환합니다.
-원본 CVD는 보존하고, LLM 입력용 문자열만 가공합니다.
+LLM이 셀/문단/리스트 ID를 혼동하지 않도록 HDML 텍스트를 명시적 타입 태그로 변환합니다.
+원본 HDML는 보존하고, LLM 입력용 문자열만 가공합니다.
 """
 
 from __future__ import annotations
@@ -29,17 +29,17 @@ def _ensure_newline_after_td(match: re.Match) -> str:
     return match.group(1) + "\n"
 
 
-def _normalize_table_boundaries(cvd_text: str) -> str:
+def _normalize_table_boundaries(hdml_text: str) -> str:
     """표 셀 경계를 줄바꿈으로 분리해 line-based 태깅 안정화."""
-    if not cvd_text:
-        return cvd_text
+    if not hdml_text:
+        return hdml_text
 
     # <td> 직후에 태그가 이어지면 줄바꿈 삽입
-    cvd_text = re.sub(r"(<td[^>]*>)(?=\s*<)", _ensure_newline_after_td, cvd_text)
+    hdml_text = re.sub(r"(<td[^>]*>)(?=\s*<)", _ensure_newline_after_td, hdml_text)
     # </td>, </list>는 항상 독립 라인으로 분리
-    cvd_text = cvd_text.replace("</td>", "\n</td>")
-    cvd_text = cvd_text.replace("</list>", "\n</list>")
-    return cvd_text
+    hdml_text = hdml_text.replace("</td>", "\n</td>")
+    hdml_text = hdml_text.replace("</list>", "\n</list>")
+    return hdml_text
 
 
 def _split_trailing_tags(text: str) -> Tuple[str, str]:
@@ -126,14 +126,14 @@ def _rewrite_image_line(line: str) -> Tuple[str, bool]:
     return f'<image id="{image_id}" data-type="image" />', True
 
 
-def tag_cvd_for_llm(cvd_text: str) -> str:
-    """LLM 입력용으로 CVD 텍스트의 ID 타입을 명시적으로 태깅한다."""
-    if not cvd_text:
-        return cvd_text
+def tag_hdml_for_llm(hdml_text: str) -> str:
+    """LLM 입력용으로 HDML 텍스트의 ID 타입을 명시적으로 태깅한다."""
+    if not hdml_text:
+        return hdml_text
 
-    cvd_text = _normalize_table_boundaries(cvd_text)
+    hdml_text = _normalize_table_boundaries(hdml_text)
     output_lines = []
-    for line in cvd_text.splitlines():
+    for line in hdml_text.splitlines():
         updated = line
 
         # 1) td 태그 ID 명시

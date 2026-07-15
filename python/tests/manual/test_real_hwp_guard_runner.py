@@ -12,7 +12,7 @@ if ROOT not in sys.path:
 
 
 from hwp_com_process import DocumentProcessor
-from processing.extraction.cvd_extractor import CVDExtractor
+from processing.extraction.hdml_extractor import HDMLExtractor
 from processing.structure.segment_registry import SegmentRegistry
 from engine.connection.security_module import activate_security_module
 
@@ -50,8 +50,8 @@ def run_real_doc_guard_test(file_path: str, start_page: int, end_page: int) -> D
         if open_result is False:
             return {"success": False, "error": "hwp.open returned False"}
 
-        extractor = CVDExtractor(hwp)
-        extracted = extractor.extract_cvd(
+        extractor = HDMLExtractor(hwp)
+        extracted = extractor.extract_hdml(
             {
                 "start": int(start_page),
                 "end": int(end_page),
@@ -59,10 +59,10 @@ def run_real_doc_guard_test(file_path: str, start_page: int, end_page: int) -> D
             }
         )
         if not extracted:
-            return {"success": False, "error": "extract_cvd returned None"}
+            return {"success": False, "error": "extract_hdml returned None"}
 
-        cvd_text, id_to_pos = extracted
-        registry = SegmentRegistry((cvd_text, id_to_pos))
+        hdml_text, id_to_pos = extracted
+        registry = SegmentRegistry((hdml_text, id_to_pos))
         processor = _make_processor()
 
         td_segments = [
@@ -135,7 +135,7 @@ def run_real_doc_guard_test(file_path: str, start_page: int, end_page: int) -> D
             "file_path": file_path,
             "pages": {"start": start_page, "end": end_page},
             "security_module_id": module_id,
-            "cvd_length": len(cvd_text),
+            "hdml_length": len(hdml_text),
             "id_count": len(id_to_pos),
             "td_count": len(td_segments),
             "guard_reason_counts": dict(reasons_counter),

@@ -308,7 +308,7 @@ export class AgentBridge extends EventEmitter {
    *
    * v5.3: RAG Tool Use 지원 - ragContext가 제공되면 LLM이 필요 시 RAG 검색 도구 호출
    *
-   * @param html - CVD 또는 DocumentView HTML
+   * @param html - HDML 또는 DocumentView HTML
    * @param prompt - 사용자 요청
    * @param options - useDelta/useHtml/compactMode/ragContext 옵션 또는 boolean (이전 시그니처 호환)
    * @returns Promise<{success: boolean, commands: number, messages: string[]}>

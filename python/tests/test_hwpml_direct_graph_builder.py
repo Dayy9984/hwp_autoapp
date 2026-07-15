@@ -128,7 +128,7 @@ def test_hwpml_direct_graph_keeps_full_text_without_preview_truncation():
     assert node.get("full_text") == long_text
 
 
-def test_hwpml_direct_graph_table_path_and_col_index_match_cvd_rules():
+def test_hwpml_direct_graph_table_path_and_col_index_match_hdml_rules():
     seg_outer = ContentSegment(
         segment_id="401",
         position=(0, 40, 0),
@@ -209,14 +209,14 @@ def test_hwpml_direct_graph_table_path_and_col_index_match_cvd_rules():
     assert by_id[402]["table_path"] == "0/0/0/0"
     assert by_id[402]["row"] == 0 and by_id[402]["col"] == 0
 
-    # CVD 규칙과 동일: colspan이 있어도 col은 '셀 순번' 기반
+    # HDML 규칙과 동일: colspan이 있어도 col은 '셀 순번' 기반
     assert by_id[403]["table_path"] == "1"
     assert by_id[403]["col"] == 0 and by_id[403]["colspan"] == 2
     assert by_id[404]["table_path"] == "1"
     assert by_id[404]["col"] == 1
 
 
-def test_hwpml_direct_graph_prefers_cvd_table_path_attr_over_registry_group_path():
+def test_hwpml_direct_graph_prefers_hdml_table_path_attr_over_registry_group_path():
     seg_td = ContentSegment(
         segment_id="501",
         position=(0, 50, 0),
@@ -229,7 +229,7 @@ def test_hwpml_direct_graph_prefers_cvd_table_path_attr_over_registry_group_path
         attrs={
             "data-row": "0",
             "data-col": "0",
-            "data-table-path": "0/0/1/0",  # CVD semantic table path (expected)
+            "data-table-path": "0/0/1/0",  # HDML semantic table path (expected)
         },
     )
     manager = _FakeBlockManager([seg_td])
@@ -255,7 +255,7 @@ def test_hwpml_direct_graph_prefers_cvd_table_path_attr_over_registry_group_path
     assert nodes[0]["table_path"] == "0/0/1/0"
 
 
-def test_hwpml_direct_graph_prefers_cvd_span_attrs_over_raw_hint():
+def test_hwpml_direct_graph_prefers_hdml_span_attrs_over_raw_hint():
     seg_td = ContentSegment(
         segment_id="502",
         position=(0, 51, 0),
@@ -275,7 +275,7 @@ def test_hwpml_direct_graph_prefers_cvd_span_attrs_over_raw_hint():
     )
     manager = _FakeBlockManager([seg_td])
 
-    # HWPML 쪽 힌트는 colspan=1이지만, CVD attrs가 colspan=3이면 attrs를 우선해야 함
+    # HWPML 쪽 힌트는 colspan=1이지만, HDML attrs가 colspan=3이면 attrs를 우선해야 함
     hwpml_text = """
 <HWPML>
   <BODY><SECTION>
@@ -298,7 +298,7 @@ def test_hwpml_direct_graph_prefers_cvd_span_attrs_over_raw_hint():
     assert nodes[0]["colspan"] == 3
 
 
-def test_hwpml_direct_graph_keeps_style_fields_from_cvd_attrs():
+def test_hwpml_direct_graph_keeps_style_fields_from_hdml_attrs():
     seg_td = ContentSegment(
         segment_id="503",
         position=(0, 52, 0),

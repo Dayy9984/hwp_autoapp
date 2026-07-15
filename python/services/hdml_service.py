@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-CVD Service
-CVD 추출 래퍼 서비스
+HDML Service
+HDML 추출 래퍼 서비스
 """
 
 import json
@@ -9,7 +9,7 @@ import os
 import sys
 from typing import Dict, Any, Optional, Callable
 
-# CVD Extractor 경로 추가
+# HDML Extractor 경로 추가
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.connection.hwp_file_opener import cleanup_temp_open_copy
@@ -18,8 +18,8 @@ from engine.connection.security_module import activate_security_module
 from .config import config
 
 
-class CVDService:
-    """CVD 추출 서비스"""
+class HDMLService:
+    """HDML 추출 서비스"""
 
     def __init__(
         self,
@@ -34,7 +34,7 @@ class CVDService:
         if self.log_callback:
             self.log_callback(level, message)
         else:
-            print(f"[CVDService] [{level}] {message}")
+            print(f"[HDMLService] [{level}] {message}")
 
     @staticmethod
     def _is_hwp_window_class(class_name: str) -> bool:
@@ -146,7 +146,7 @@ class CVDService:
         )
         return any(token in normalized for token in keywords)
     
-    def extract_single_cvd(
+    def extract_single_hdml(
         self, 
         file_path: str, 
         output_dir: str,
@@ -155,11 +155,11 @@ class CVDService:
         end_pct: float = 1.0
     ) -> Dict[str, Any]:
         """
-        단일 파일 CVD 추출 (HWPML 파싱 방식)
+        단일 파일 HDML 추출 (HWPML 파싱 방식)
 
         Args:
             file_path: HWP/HWPX 파일 경로
-            output_dir: CVD 출력 디렉토리
+            output_dir: HDML 출력 디렉토리
             progress_callback: 진행률 콜백
             start_pct: 시작 진행률 (0.0 ~ 1.0)
             end_pct: 종료 진행률 (0.0 ~ 1.0)
@@ -181,10 +181,10 @@ class CVDService:
 
         try:
             from pyhwpx import Hwp
-            from processing.extraction.cvd_extractor import CVDExtractor
+            from processing.extraction.hdml_extractor import HDMLExtractor
 
             base_name = os.path.splitext(os.path.basename(file_path))[0]
-            self.log("info", f"[{base_name}] CVD 추출 시작")
+            self.log("info", f"[{base_name}] HDML 추출 시작")
             report(0.05, f"[{base_name}] 파일 준비 중...")
 
             # HWP 열기
@@ -226,10 +226,10 @@ class CVDService:
                     ) from open_error
                 raise
 
-            # CVD 추출
+            # HDML 추출
             report(0.6, f"[{base_name}] 구조 분석 중...")
-            self.log("info", f"[{base_name}] CVD 추출기 실행 중...")
-            extractor = CVDExtractor(hwp)
+            self.log("info", f"[{base_name}] HDML 추출기 실행 중...")
+            extractor = HDMLExtractor(hwp)
 
             # 빌드 환경(Nuitka)에서 COM 초기화가 느려 PageCount=0일 수 있음 → 추가 대기
             import time as _time
@@ -243,21 +243,21 @@ class CVDService:
 
             if page_count <= 0:
                 raise RuntimeError("HWP_PAGE_COUNT_UNAVAILABLE")
-            extracted = extractor.extract_cvd(
+            extracted = extractor.extract_hdml(
                 {"start": 1, "end": page_count, "current_page": 1}
             )
             if extracted is None:
-                raise ValueError("CVD extraction returned None")
+                raise ValueError("HDML extraction returned None")
             html_content, _id_to_pos = extracted
 
             # 저장
             report(0.9, f"[{base_name}] 결과 저장 중...")
             self.log("info", f"[{base_name}] HTML 파일 저장 중...")
             os.makedirs(output_dir, exist_ok=True)
-            cvd_path = os.path.join(output_dir, f"{base_name}.cvd.md")
-            meta_path = os.path.join(output_dir, f"{base_name}.cvd.meta.json")
+            hdml_path = os.path.join(output_dir, f"{base_name}.hdml.md")
+            meta_path = os.path.join(output_dir, f"{base_name}.hdml.meta.json")
 
-            with open(cvd_path, "w", encoding="utf-8") as f:
+            with open(hdml_path, "w", encoding="utf-8") as f:
                 f.write(html_content)
 
             meta = {
@@ -269,17 +269,17 @@ class CVDService:
             with open(meta_path, "w", encoding="utf-8") as f:
                 json.dump(meta, f, ensure_ascii=False, indent=2)
 
-            self.log("info", f"[{base_name}] CVD 추출 완료 ({len(html_content):,} chars)")
+            self.log("info", f"[{base_name}] HDML 추출 완료 ({len(html_content):,} chars)")
             report(1.0, f"[{base_name}] 완료")
 
             return {
                 "success": True,
-                "cvd_path": cvd_path,
+                "hdml_path": hdml_path,
                 "meta_path": meta_path
             }
 
         except Exception as e:
-            self.log("error", f"CVD 추출 실패: {str(e)}")
+            self.log("error", f"HDML 추출 실패: {str(e)}")
             return {"success": False, "error": str(e)}
         finally:
             # 생성한 인스턴스는 예외 경로를 포함해 항상 종료한다.
@@ -296,7 +296,7 @@ class CVDService:
                     pass
             cleanup_temp_open_copy(temp_open_copy_path)
     
-    def extract_pair_cvd(
+    def extract_pair_hdml(
         self,
         project_id: str,
         pair_id: str,
@@ -305,14 +305,14 @@ class CVDService:
         progress_callback: Optional[Callable[[float, str], None]] = None
     ) -> Dict[str, Any]:
         """
-        Template Pair CVD 추출
+        Template Pair HDML 추출
         """
         try:
             output_dir = config.get_template_pair_path(project_id, pair_id)
             os.makedirs(output_dir, exist_ok=True)
             
-            # 템플릿 CVD 추출 (0% ~ 50%)
-            template_result = self.extract_single_cvd(
+            # 템플릿 HDML 추출 (0% ~ 50%)
+            template_result = self.extract_single_hdml(
                 template_path, 
                 output_dir,
                 progress_callback=progress_callback,
@@ -322,8 +322,8 @@ class CVDService:
             if not template_result.get("success"):
                 return template_result
             
-            # 작성본 CVD 추출 (50% ~ 100%)
-            filled_result = self.extract_single_cvd(
+            # 작성본 HDML 추출 (50% ~ 100%)
+            filled_result = self.extract_single_hdml(
                 filled_path, 
                 output_dir,
                 progress_callback=progress_callback,
@@ -334,30 +334,30 @@ class CVDService:
                 return filled_result
             
             # 결과 경로 정리 (이제 .md 파일)
-            template_cvd_path = os.path.join(output_dir, "template.cvd.md")
-            filled_cvd_path = os.path.join(output_dir, "filled.cvd.md")
+            template_hdml_path = os.path.join(output_dir, "template.hdml.md")
+            filled_hdml_path = os.path.join(output_dir, "filled.hdml.md")
 
             # 파일명 변경
-            if os.path.exists(template_result["cvd_path"]):
-                os.rename(template_result["cvd_path"], template_cvd_path)
+            if os.path.exists(template_result["hdml_path"]):
+                os.rename(template_result["hdml_path"], template_hdml_path)
             if os.path.exists(template_result["meta_path"]):
-                os.rename(template_result["meta_path"], os.path.join(output_dir, "template.cvd.meta.json"))
-            if os.path.exists(filled_result["cvd_path"]):
-                os.rename(filled_result["cvd_path"], filled_cvd_path)
+                os.rename(template_result["meta_path"], os.path.join(output_dir, "template.hdml.meta.json"))
+            if os.path.exists(filled_result["hdml_path"]):
+                os.rename(filled_result["hdml_path"], filled_hdml_path)
             if os.path.exists(filled_result["meta_path"]):
-                os.rename(filled_result["meta_path"], os.path.join(output_dir, "filled.cvd.meta.json"))
+                os.rename(filled_result["meta_path"], os.path.join(output_dir, "filled.hdml.meta.json"))
             
             if progress_callback:
-                progress_callback(1.0, "CVD 추출 완료")
+                progress_callback(1.0, "HDML 추출 완료")
             
             return {
                 "success": True,
-                "template_cvd_path": template_cvd_path,
-                "filled_cvd_path": filled_cvd_path
+                "template_hdml_path": template_hdml_path,
+                "filled_hdml_path": filled_hdml_path
             }
             
         except Exception as e:
-            self.log("error", f"Pair CVD 추출 실패: {str(e)}")
+            self.log("error", f"Pair HDML 추출 실패: {str(e)}")
             return {
                 "success": False,
                 "error": str(e)

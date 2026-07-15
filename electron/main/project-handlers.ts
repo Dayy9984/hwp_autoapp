@@ -641,7 +641,7 @@ export function registerProjectHandlers(
             db.prepare('UPDATE projects SET updated_at = ? WHERE id = ?')
                 .run(Date.now(), projectId)
 
-            // CVD 추출 및 Diff 생성 (백그라운드, 별도 프로세스에서 실행)
+            // HDML 추출 및 Diff 생성 (백그라운드, 별도 프로세스에서 실행)
             const pythonBridge = getPythonBridge()
             const fileReaderBridge = getFileReaderBridge()
             if (pythonBridge && pythonBridge.isRunning()) {
@@ -652,7 +652,7 @@ export function registerProjectHandlers(
                 const filledExtractPath = fs.existsSync(filledPath) ? filledPath : filledFullPath
                 const userDataPath = app.getPath('userData')
 
-                // fileReaderBridge 시작 후 CVD 추출 → Diff 생성 순차 실행
+                // fileReaderBridge 시작 후 HDML 추출 → Diff 생성 순차 실행
                 const startReader = async () => {
                     if (!fileReaderBridge) {
                         throw new Error('FileReader bridge unavailable')
@@ -667,7 +667,7 @@ export function registerProjectHandlers(
                 }
 
                 startReader().then(reader =>
-                    reader.call('cvd:extractPair', {
+                    reader.call('hdml:extractPair', {
                         projectId: projectId,
                         pairId: pairId,
                         templatePath: templateExtractPath,
@@ -676,16 +676,16 @@ export function registerProjectHandlers(
                     })
                 ).then(extractResult => {
                     if (extractResult.success) {
-                        console.log(`[ProjectHandlers] CVD extraction completed for pair: ${pairId}`)
+                        console.log(`[ProjectHandlers] HDML extraction completed for pair: ${pairId}`)
 
                         // Diff 생성 (별도 프로세스에서 실행)
-                        return startReader().then((reader) => reader.call('cvd:generateDiff', {
+                        return startReader().then((reader) => reader.call('hdml:generateDiff', {
                             projectId: projectId,
                             pairId: pairId,
                             userDataPath: userDataPath
                         }))
                     } else {
-                        console.error(`[ProjectHandlers] CVD extraction failed for pair: ${pairId}`, extractResult.error)
+                        console.error(`[ProjectHandlers] HDML extraction failed for pair: ${pairId}`, extractResult.error)
                         throw new Error(extractResult.error)
                     }
                 }).then(async diffResult => {
@@ -723,7 +723,7 @@ export function registerProjectHandlers(
                     }
                 })
             } else {
-                console.warn('[ProjectHandlers] Python bridge not available, skipping CVD extraction and RAG indexing')
+                console.warn('[ProjectHandlers] Python bridge not available, skipping HDML extraction and RAG indexing')
             }
 
             return { success: true, data: { pair } }

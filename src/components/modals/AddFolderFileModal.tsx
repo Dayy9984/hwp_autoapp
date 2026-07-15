@@ -209,7 +209,7 @@ export function AddFolderFileModal() {
               // 기본 증가량
               let increment = FAKE_PROGRESS_INCREMENT
 
-              // CVD 추출('extracting')은 더 빠르게 증가 (5%씩)
+              // HDML 추출('extracting')은 더 빠르게 증가 (5%씩)
               if (p.status === 'extracting') {
                 increment = 5
               }
@@ -345,8 +345,8 @@ export function AddFolderFileModal() {
     const handleProgress = (event: string, data: any) => {
       // console.log('[AddFolderFileModal] Progress event:', event, data)
 
-      // CVD 진행 상태
-      if (event === 'cvd:progress' && data.pairId) {
+      // HDML 진행 상태
+      if (event === 'hdml:progress' && data.pairId) {
         setTemplatePairs(prev => prev.map(p =>
           p.id === data.pairId
             ? {
@@ -379,7 +379,7 @@ export function AddFolderFileModal() {
         }
       }
 
-      // Template Pair 업로드 실패 (CVD 추출/Diff 생성 실패)
+      // Template Pair 업로드 실패 (HDML 추출/Diff 생성 실패)
       if (event === 'pair:uploadFailed' && data.pairId) {
         console.error('[AddFolderFileModal] Template pair upload failed:', data.pairId, data.error)
         console.log('[AddFolderFileModal] Current templatePairs before removal:', templatePairs)
@@ -839,7 +839,7 @@ export function AddFolderFileModal() {
         // ⭐ CRITICAL FIX: Backend ID로 교체 + 파일명 보존 (이벤트 수신을 위해 필수)
         const backendPairId = backendPair.id
 
-        // CVD 추출 및 RAG 인덱싱 진행 중이므로 'extracting' 상태로 변경
+        // HDML 추출 및 RAG 인덱싱 진행 중이므로 'extracting' 상태로 변경
         // 완료 시 'pair:indexComplete' 이벤트로 'ready'로 변경
         setTemplatePairs(prev => prev.map(p =>
           p.id === pairId ? {
@@ -904,7 +904,7 @@ export function AddFolderFileModal() {
   const getStatusText = (status: string): string => {
     switch (status) {
       case 'uploading': return '업로드 중...'
-      case 'extracting': return 'CVD 추출 중...'
+      case 'extracting': return 'HDML 추출 중...'
       case 'indexing': return '인덱싱 중...'
       case 'ready': return '완료'
       case 'failed': return '실패'

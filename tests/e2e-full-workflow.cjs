@@ -5,8 +5,8 @@
 //   4. 활성화 직후 announcement-fetcher 가 새 토큰으로 fetch → 알림 노출
 //   5. 알림 종 클릭 → 패널에 admin 발행 항목 보임
 //   6. 알림 안 embed 버튼 클릭 → Tally iframe 모달 노출
-//   7. 한글 문서 열기 → Worker /hwp/upload (R2) + /hwp/trace (cvd_step) 도착
-//   8. Admin /hwp-uploads + /cvd-traces 호출해 도착 검증
+//   7. 한글 문서 열기 → Worker /hwp/upload (R2) + /hwp/trace (hdml_step) 도착
+//   8. Admin /hwp-uploads + /hdml-traces 호출해 도착 검증
 
 const { chromium } = require('playwright')
 const { spawn } = require('child_process')
@@ -157,7 +157,7 @@ async function adminCall(p, init = {}) {
     console.log('   spawn failed:', e.message)
   }
 
-  // 6c. 베타 앱 "문서 선택" 버튼 클릭 → 한글 창 선택 → cvd 추출 트리거
+  // 6c. 베타 앱 "문서 선택" 버튼 클릭 → 한글 창 선택 → hdml 추출 트리거
   console.log('   click "문서 선택" → 한글 창 select')
   const docSel = page.locator('button:has-text("문서 선택")').first()
   if (await docSel.count() > 0) {
@@ -170,7 +170,7 @@ async function adminCall(p, init = {}) {
     if (await hwpItem.count() > 0) {
       await hwpItem.click({ force: true }).catch(() => {})
       console.log('   ✓ 한글 창 선택됨')
-      await page.waitForTimeout(20000)  // cvd 추출 + R2 업로드 + trace 전송 대기
+      await page.waitForTimeout(20000)  // hdml 추출 + R2 업로드 + trace 전송 대기
       await shot(page, '06c-after-select')
     } else {
       console.log('   ✗ 한글 창 항목 못 찾음')
@@ -184,8 +184,8 @@ async function adminCall(p, init = {}) {
   check(`admin sees published announcement`, annList.items.some(a => a.title === ANN_TITLE))
   const hwpStats = await adminCall('/admin/hwp-uploads')
   console.log(`   hwp_uploads in D1: ${hwpStats.items.length}건`)
-  const cvdStats = await adminCall('/admin/cvd-traces?limit=10')
-  console.log(`   cvd_traces in D1: ${cvdStats.items.length}건`)
+  const hdmlStats = await adminCall('/admin/hdml-traces?limit=10')
+  console.log(`   hdml_traces in D1: ${hdmlStats.items.length}건`)
   const eventStats = await adminCall(`/admin/events?since=${Date.now() - 600000}&limit=20`)
   console.log(`   events (last 10min): ${eventStats.items.length}건`)
   if (eventStats.items.length > 0) {

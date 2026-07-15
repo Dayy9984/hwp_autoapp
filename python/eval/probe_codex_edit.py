@@ -52,8 +52,8 @@ def main() -> int:
     print(f"[probe] client built: codex_mode={client.codex_mode}, model={client.model}, "
           f"base_url={getattr(client.client, 'base_url', '?')}")
 
-    # Tiny synthetic ENRICHED_CVD: a label cell + an empty value cell.
-    cvd = (
+    # Tiny synthetic ENRICHED_HDML: a label cell + an empty value cell.
+    hdml = (
         "<table>\n"
         "  <tr><td id=\"1\"><p id=\"1\">이름</p></td>"
         "<td id=\"2\"><p id=\"2\"></p></td></tr>\n"
@@ -89,7 +89,7 @@ def main() -> int:
     err = None
     try:
         res = client.generate_commands_streaming(
-            html=cvd,
+            html=hdml,
             prompt=prompt,
             on_command=on_command,
             on_progress=on_progress,
