@@ -119,12 +119,27 @@ def serialize_enriched_cvd(
     parts.append(_page_range_header(page_range))
     parts.append("<main_content>")
 
+    # B6 fix (beta.11): page sequence monotonic 강제 — nested TABLE 의
+    # PageBreak="Cell" 으로 인한 페이지 역행 (1→2→3→1→3→4) 방지.
+    # 한 번 진행 한 page 이하 로 = 직전 값 유지.
     current_page: Optional[int] = None
+    max_page_seen: int = 0
     for i, (_, item_type, item) in enumerate(ordered_items):
         item_page = item.get("page")
-        if item_page is not None and item_page != current_page:
-            parts.append(f'<page num="{item_page}" />')
-            current_page = item_page
+        if item_page is not None:
+            try:
+                ip = int(item_page)
+            except (ValueError, TypeError):
+                ip = None
+            if ip is not None:
+                if ip < max_page_seen:
+                    # 역행 = 직전 값 유지 (= page num 출력 안 함)
+                    ip = current_page
+                else:
+                    max_page_seen = max(max_page_seen, ip)
+                if ip is not None and ip != current_page:
+                    parts.append(f'<page num="{ip}" />')
+                    current_page = ip
         if item_type == "node":
             # 표와 표 사이에 끼인 빈 단락은 HWP 구조 필수 구분자이므로 제외.
             # 내용이 있는 단락(◦/- 불릿 등) 또는 표 사이가 아닌 빈 단락은 유지.
@@ -184,11 +199,21 @@ def _safe_int(val: Any, default: int = 0) -> int:
 
 _SKIP_COLORS = frozenset({"#000000", "#ffffff", ""})
 
+# 단위 / placeholder 패턴: "(㎡)", "(원)", "(명)", "(개)" 같은 단위 표기 만 인 cell.
+# replace_cell_content 시 단위 사라지지 않도록 LLM 에 metadata 으로 전달.
+import re as _re
+_UNIT_PLACEHOLDER_RE = _re.compile(r'^\s*[\(（][^)）]+[\)）]\s*$')
+
 
 def _build_td_attrs(node: Dict[str, Any]) -> str:
     """Build attribute string for a ``<td>`` element."""
     parts: List[str] = []
     parts.append(f'id="{node.get("id", "")}"')
+
+    # 단위 placeholder cell detect (B5 fix - beta.11)
+    preview = (node.get("preview_text") or node.get("full_text") or "").strip()
+    if preview and _UNIT_PLACEHOLDER_RE.match(preview):
+        parts.append('data-role="unit-placeholder"')
 
     bgcolor = (node.get("bgcolor") or "").lower().strip()
     if bgcolor and bgcolor not in _SKIP_COLORS:

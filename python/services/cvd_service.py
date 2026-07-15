@@ -90,7 +90,19 @@ class CVDService:
         return pids
 
     def _get_hwp_pid(self, hwp: Any) -> Optional[int]:
-        """pyhwpx Hwp 인스턴스의 활성 윈도우 PID를 추출한다."""
+        """pyhwpx Hwp 인스턴스의 활성 윈도우 PID를 추출한다.
+
+        HWP 2018 (Version "10,...") = Active_XHwpWindow.WindowHandle 호출 자체 가
+        active document 를 빈 문서 로 toggle 시키는 buggy 동작 → 호출 자체 회피.
+        대신 None 반환 → 호출자 가 fallback (예: 첫 번째 hwp.exe PID).
+        """
+        try:
+            v = str(getattr(hwp, 'Version', '')).strip()
+            if v.startswith("10,"):
+                return None  # HWP 2018: WindowHandle 호출 skip
+        except Exception:
+            pass
+
         try:
             import win32process
             hwnd = int(hwp.XHwpWindows.Active_XHwpWindow.WindowHandle)

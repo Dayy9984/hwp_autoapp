@@ -62,10 +62,5 @@
     "installerHeader": "build/installer-header.bmp",
     "runAfterFinish": true,
     "include": "build/installer.nsh"
-  },
-  "publish": {
-    "provider": "generic",
-    "url": "https://inserty-beta-worker.snsoffice.workers.dev/auto-update/",
-    "channel": "latest"
   }
 }

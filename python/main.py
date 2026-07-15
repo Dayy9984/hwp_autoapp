@@ -137,12 +137,22 @@ class DocumentProcessor:
 
                     pid = None
                     hwnd = None
+                    # HWP 2018 (Version "10,...") = WindowHandle 호출 시 active document
+                    # toggle 부수효과. 호출 자체 회피 + pid/hwnd=None 으로 등록.
+                    is_hwp_legacy = False
                     try:
-                        # WindowHandle 속성 사용 (32/64비트 호환)
-                        hwnd = hwp.XHwpWindows.Item(0).WindowHandle
-                        pid = self._get_pid_from_hwnd(hwnd)
+                        v = str(getattr(hwp, 'Version', '')).strip()
+                        is_hwp_legacy = v.startswith("10,")
                     except Exception:
                         pass
+
+                    if not is_hwp_legacy:
+                        try:
+                            # WindowHandle 속성 사용 (32/64비트 호환)
+                            hwnd = hwp.XHwpWindows.Item(0).WindowHandle
+                            pid = self._get_pid_from_hwnd(hwnd)
+                        except Exception:
+                            pass
 
                     candidates.append((hwp, pid, hwnd))
                 except StopIteration:

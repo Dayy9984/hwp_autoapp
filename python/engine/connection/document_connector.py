@@ -884,15 +884,18 @@ class HwpConnector:
             except Exception:
                 pass
 
-            # TrackChangeOption 적용 제거 - HWP 기본 스타일 유지
-            # 이전: GetDefault → Execute로 잘못된 디폴트 적용
-            # 삽입: 밑줄 없이 밝은 녹색, 변경: 바깥쪽 테두리 빨강이 정상
-            # try:
-            #     pset = self._hwp.HParameterSet.HTrackChange
-            #     self._hwp.HAction.GetDefault("TrackChangeOption", pset.HSet)
-            #     self._hwp.HAction.Execute("TrackChangeOption", pset.HSet)
-            # except Exception:
-            #     pass
+            # HWP 2018 (Version "10,") 만 = TrackChangeOption GetDefault + Execute 적용.
+            # 이유: HWP 2018 의 ReviewerColor default = 빨강 으로 변경 추적 표시 = 빨강 밑줄.
+            #       TrackChangeOption default (= 11 녹색 / 6 빨강) 적용 시 = 초록 + 빨강 취소선.
+            # HWP 2024 = 적용 X (= 이전 inserty 가 "잘못된 디폴트 적용" 판단 + 제거 한 이유).
+            try:
+                v = str(getattr(self._hwp, 'Version', '')).strip()
+                if v.startswith("10,"):
+                    pset = self._hwp.HParameterSet.HTrackChange
+                    self._hwp.HAction.GetDefault("TrackChangeOption", pset.HSet)
+                    self._hwp.HAction.Execute("TrackChangeOption", pset.HSet)
+            except Exception:
+                pass
 
             # Track Change 활성화 후 표시 옵션 적용
             try:

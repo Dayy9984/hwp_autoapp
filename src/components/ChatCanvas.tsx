@@ -10,8 +10,6 @@ import { useProgressStore } from '../stores/progress-store'
 import { ProgressPanel } from './ProgressPanel'
 
 import { Copy, Check, Plus, FileText, File, FileSpreadsheet } from 'lucide-react'
-import { BetaFeedbackInlineCard } from './BetaFeedbackToast'
-import { IS_BETA } from '../config/beta'
 
 
 // 타이핑 효과 컴포넌트 (v4.1.6: 속도 조정 15ms → 25ms)
@@ -657,9 +655,6 @@ export function ChatCanvas() {
             )
 
           })}
-
-          {/* 베타 피드백 inline 카드 — chat 한 사이클 끝난 후 노출. 닫기/클릭 시 Tally 폼. */}
-          {IS_BETA && <BetaFeedbackInlineCard />}
 
         </div>
 

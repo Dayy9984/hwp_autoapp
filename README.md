@@ -166,7 +166,7 @@ pnpm dev    # Vite + Electron + Python 서브프로세스 동시 기동
 VITE_OPENAI_API_KEY=sk-proj-...
 
 # 자체 인스톨러 업데이트 피드 (선택)
-UPDATE_FEED_URL=
+UPDATE_FEED_URL=https://inserty-release-worker.snsoffice.workers.dev/auto-update/
 ```
 
 > Codex 모드만 쓴다면 `VITE_OPENAI_API_KEY`는 비워둬도 됩니다. 앱 안의 설정 → AI에서 ChatGPT 계정으로 로그인하세요.

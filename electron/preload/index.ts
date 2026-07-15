@@ -28,6 +28,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   codex: {
     status: () => ipcRenderer.invoke('codex:status'),
     login: () => ipcRenderer.invoke('codex:login'),
+    checkNode: () => ipcRenderer.invoke('codex:check-node'),
+    openNodejsDownload: () => ipcRenderer.invoke('codex:open-nodejs-download'),
+    installCli: () => ipcRenderer.invoke('codex:install-cli'),
+    onInstallProgress: (
+      callback: (data: { type: 'stdout' | 'stderr' | 'done' | 'error'; text?: string; error?: string; success?: boolean; code?: number | null }) => void
+    ) => {
+      const handler = (_e: unknown, data: any) => callback(data)
+      ipcRenderer.on('codex:install-progress', handler)
+      return () => ipcRenderer.removeListener('codex:install-progress', handler)
+    },
   },
 
   // 다이얼로그
@@ -96,30 +106,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Auth (logout only)
   auth: {
     logout: () => ipcRenderer.invoke('auth:logout'),
-  },
-
-  // Update (App Update Check & Download - electron-updater 기반)
-  update: {
-    check: () => ipcRenderer.invoke('update:check'),
-    download: () => ipcRenderer.invoke('update:download'),
-    install: () => ipcRenderer.invoke('update:install'),
-    startInstallFlow: () => ipcRenderer.invoke('update:startInstallFlow'),
-    getCurrentVersion: () => ipcRenderer.invoke('update:getCurrentVersion'),
-    startPeriodicCheck: (intervalMs?: number) => ipcRenderer.invoke('update:startPeriodicCheck', intervalMs),
-    stopPeriodicCheck: () => ipcRenderer.invoke('update:stopPeriodicCheck'),
-    onStatus: (callback: (status: {
-      status: 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
-      info?: { version: string; releaseDate?: string; releaseNotes?: string }
-      progress?: { percent: number; bytesPerSecond: number; total: number; transferred: number }
-      error?: string
-      isCritical?: boolean  // 필수 업데이트 여부
-      releaseNotes?: string // 릴리스 노트
-    }) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, status: unknown) => callback(status as Parameters<typeof callback>[0])
-      ipcRenderer.on('auto-update:status', handler)
-      return () => ipcRenderer.removeListener('auto-update:status', handler)
-    },
-    getLastStatus: () => ipcRenderer.invoke('update:getLastStatus'),
   },
 
   // Log (Auth & Usage Logging)
@@ -202,9 +188,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // Undo/Redo 및 Diff 모드 (TASK-006)
-  tally: {
-    clearStorage: () => ipcRenderer.invoke('tally:clearStorage'),
-  },
   edit: {
     undo: (count?: number) => ipcRenderer.invoke('edit:undo', count),
     redo: (count?: number) => ipcRenderer.invoke('edit:redo', count),
@@ -229,7 +212,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('trackChanges:rejectSelected', params),
   },
 
-  // 베타 진단 데이터 동의 (verify-loop)
+  // 진단 데이터 동의 (verify-loop)
   consent: {
     set: (consented: boolean) => ipcRenderer.invoke('consent:set', { consented }),
   },
@@ -326,44 +309,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('doc:activeChanged', subscription)
   },
 
-  license: {
-    activate: (key: string) => ipcRenderer.invoke('license:activate', key),
-    verify: () => ipcRenderer.invoke('license:verify'),
-    // Frontend 가 API LICENSE_* 에러 catch 시 강제 verify 트리거하는 별칭.
-    // 의미상 verify 와 동일 (main 에서 같은 핸들러 사용) — 호출 위치 의도를 명확히 함.
-    forceReverify: () => ipcRenderer.invoke('license:verify'),
-    getInitialStatus: () => ipcRenderer.invoke('license:getInitialStatus'),
-    getCachedKey: () => ipcRenderer.invoke('license:getCachedKey'),
-    tryPendingKey: () => ipcRenderer.invoke('license:tryPendingKey'),
-    openExternal: (url: string) => ipcRenderer.invoke('license:openExternal', url),
-    listDevices: () => ipcRenderer.invoke('license:listDevices'),
-    removeDevice: (targetDeviceId: string) =>
-      ipcRenderer.invoke('license:removeDevice', targetDeviceId),
-    retryActivate: () => ipcRenderer.invoke('license:retryActivate'),
-    // main 측 lastStatus 가 갱신될 때마다 발생. App.tsx 가 구독해 LicenseGate 즉시 갱신.
-    onStatusChanged: (callback: (status: any) => void) => {
-      const sub = (_e: any, status: any) => callback(status)
-      ipcRenderer.on('license:statusChanged', sub)
-      return () => ipcRenderer.removeListener('license:statusChanged', sub)
-    },
-  },
-
-  telemetry: {
-    track: (eventType: string, payload?: Record<string, unknown>) =>
-      ipcRenderer.invoke('telemetry:track', eventType, payload),
-  },
-
-  announcements: {
-    list: () => ipcRenderer.invoke('announcements:list'),
-    dismiss: (id: string) => ipcRenderer.invoke('announcements:dismiss', id),
-    refresh: () => ipcRenderer.invoke('announcements:refresh'),
-    // 신규 알림 도착 시 main 이 push — renderer 가 자동 모달 노출.
-    onNew: (callback: (announcement: any) => void) => {
-      const sub = (_e: any, a: any) => callback(a)
-      ipcRenderer.on('announcement:new', sub)
-      return () => ipcRenderer.removeListener('announcement:new', sub)
-    },
-  },
 })
 
 // Splash window API (네이티브 스플래시 화면용)
@@ -416,6 +361,12 @@ declare global {
       codex: {
         status: () => Promise<{ installed: boolean; authenticated?: boolean; reason?: string }>
         login: () => Promise<{ success: boolean; error?: string }>
+        checkNode: () => Promise<{ installed: boolean; hasNpm: boolean; version?: string; error?: string }>
+        openNodejsDownload: () => Promise<{ success: boolean; error?: string }>
+        installCli: () => Promise<{ success: boolean; code?: number | null; error?: string; message?: string }>
+        onInstallProgress: (
+          callback: (data: { type: 'stdout' | 'stderr' | 'done' | 'error'; text?: string; error?: string; success?: boolean; code?: number | null }) => void
+        ) => () => void
       }
       dialog: {
         openFile: (options?: any) => Promise<string | null>
@@ -654,7 +605,7 @@ declare global {
           }
         }>
       }
-      // 베타 진단 데이터 동의 (verify-loop)
+      // 진단 데이터 동의 (verify-loop)
       consent: {
         set: (consented: boolean) => Promise<{ ok: boolean; error?: string }>
       }
@@ -805,48 +756,6 @@ declare global {
       onActiveDocChanged: (callback: (docKey: string | undefined, activeDocHint?: { documentId?: number; path?: string; name?: string }) => void) => () => void
       auth: {
         logout: () => Promise<{ success: boolean }>
-      }
-      // Update (App Update Check & Download - electron-updater 기반)
-      update: {
-        check: () => Promise<{
-          success: boolean
-          updateAvailable?: boolean
-          version?: string
-          error?: string
-        }>
-        download: () => Promise<{
-          success: boolean
-          error?: string
-        }>
-        install: () => Promise<{
-          success: boolean
-        }>
-        getCurrentVersion: () => Promise<{
-          success: boolean
-          version: string
-          downloadedVersion: string | null
-        }>
-        startPeriodicCheck: (intervalMs?: number) => Promise<{ success: boolean }>
-        stopPeriodicCheck: () => Promise<{ success: boolean }>
-        onStatus: (callback: (status: {
-          status: 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
-          info?: { version: string; releaseDate?: string; releaseNotes?: string }
-          progress?: { percent: number; bytesPerSecond: number; total: number; transferred: number }
-          error?: string
-          isCritical?: boolean
-          releaseNotes?: string
-        }) => void) => () => void
-        getLastStatus: () => Promise<{
-          success: boolean
-          status: {
-            status: 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
-            info?: { version: string; releaseDate?: string; releaseNotes?: string }
-            progress?: { percent: number; bytesPerSecond: number; total: number; transferred: number }
-            error?: string
-            isCritical?: boolean
-            releaseNotes?: string
-          } | null
-        }>
       }
       // Log (Auth & Usage Logging)
       log: {

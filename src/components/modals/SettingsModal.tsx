@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useUIStore } from '../../stores/ui-store'
 import { useSettingsStore } from '../../stores/settings-store'
 import openAiModels from '../../config/openai-models.json'
-import { BETA_CODEX_ONLY } from '../../config/beta'
+import { CODEX_ONLY_MODE } from '../../config/release'
 import {
   Settings,
   BarChart3,
@@ -19,6 +19,10 @@ import {
   AlertTriangle,
   Loader2,
   ExternalLink,
+  ShieldCheck,
+  Laptop,
+  Trash2,
+  RefreshCw,
 } from 'lucide-react'
 
 function CodexStatusPanel() {
@@ -71,22 +75,26 @@ function CodexStatusPanel() {
 
   if (!status) return null
 
-  // 설치 안 됨
+  // 설치 안 됨 → 자동 설정 wizard 시작 (사용자 가 직접 명령 외울 필요 X)
   if (!status.installed) {
     return (
       <div className="mt-3 space-y-2">
         <div className="flex items-center gap-2">
           <XCircle size={14} className="text-red-500 shrink-0" />
-          <span className="text-xs text-red-600">Codex CLI가 설치되어 있지 않습니다</span>
+          <span className="text-xs text-red-600">Codex CLI 가 설치 되어 있지 않습니다</span>
         </div>
-        <p className="text-xs text-text-tertiary">
-          <code className="bg-bg px-1.5 py-0.5 rounded">npm install -g @openai/codex</code>로 설치하세요.
-        </p>
+        <button
+          data-testid="codex-panel-setup-install"
+          onClick={() => useUIStore.getState().openModal('codex-setup')}
+          className="inline-flex items-center gap-2 px-4 py-2 bg-text text-bg rounded-lg text-sm font-medium hover:bg-text/90 transition-colors"
+        >
+          설치 하기
+        </button>
       </div>
     )
   }
 
-  // 설치됨 + 로그인 안 됨
+  // 설치됨 + 로그인 안 됨 → 자동 설정 wizard 의 로그인 step 으로
   if (!status.authenticated) {
     return (
       <div className="mt-3 space-y-2">
@@ -94,23 +102,32 @@ function CodexStatusPanel() {
           <AlertTriangle size={14} className="text-yellow-500 shrink-0" />
           <span className="text-xs text-yellow-600">로그인이 필요합니다</span>
         </div>
-        <button
-          onClick={handleLogin}
-          disabled={loggingIn}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-text text-bg rounded-lg text-sm font-medium hover:bg-text/90 transition-colors disabled:opacity-50"
-        >
-          {loggingIn ? (
-            <>
-              <Loader2 size={14} className="animate-spin" />
-              로그인 중...
-            </>
-          ) : (
-            <>
-              <ExternalLink size={14} />
-              Codex 로그인
-            </>
-          )}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleLogin}
+            disabled={loggingIn}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-text text-bg rounded-lg text-sm font-medium hover:bg-text/90 transition-colors disabled:opacity-50"
+          >
+            {loggingIn ? (
+              <>
+                <Loader2 size={14} className="animate-spin" />
+                로그인 중...
+              </>
+            ) : (
+              <>
+                <ExternalLink size={14} />
+                Codex 로그인
+              </>
+            )}
+          </button>
+          <button
+            data-testid="codex-panel-setup-login"
+            onClick={() => useUIStore.getState().openModal('codex-setup')}
+            className="text-xs text-text-tertiary hover:text-text underline"
+          >
+            자동 설정 마법사
+          </button>
+        </div>
       </div>
     )
   }
@@ -140,9 +157,337 @@ const formatDate = (timestamp: number) => {
 
 const formatPrice = (value: number) => `$${value.toFixed(2)}`
 
-type SettingsTab = 'general' | 'ai' | 'usage'
+type SettingsTab = 'general' | 'ai' | 'usage' | 'license'
 
 type AiTab = 'chat' | 'embedding'
+
+type LicensePanelStatus =
+  | { state: 'loading' }
+  | { state: 'ok'; expires_at: string | null }
+  | { state: 'offline_grace'; expires_at: string | null }
+  | { state: 'expired' }
+  | { state: 'revoked' }
+  | { state: 'leaked'; device_count?: number }
+  | { state: 'device_limit_reached'; device_count?: number; max_devices?: number }
+  | { state: 'invalid'; reason?: string }
+  | { state: 'no_license' }
+  | { state: 'offline_blocked' }
+
+interface LicenseDeviceRow {
+  device_id: string
+  device_name: string | null
+  device_os: string | null
+  last_seen_at: string
+  first_seen_at: string
+}
+
+const DEFAULT_MAX_LICENSE_DEVICES = 2
+
+function formatOptionalDate(value: string | null | undefined) {
+  if (!value) return '무기한'
+  try {
+    return new Intl.DateTimeFormat('ko-KR', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date(value))
+  } catch {
+    return value
+  }
+}
+
+function licenseStateLabel(status: LicensePanelStatus | null) {
+  switch (status?.state) {
+    case 'ok':
+      return '정상'
+    case 'offline_grace':
+      return '오프라인 사용 가능'
+    case 'expired':
+      return '만료됨'
+    case 'revoked':
+      return '무효화됨'
+    case 'leaked':
+      return '비정상 사용 감지'
+    case 'device_limit_reached':
+      return '기기 등록 한도 초과'
+    case 'invalid':
+      return '유효하지 않음'
+    case 'no_license':
+      return '미등록'
+    case 'offline_blocked':
+      return '네트워크 확인 필요'
+    default:
+      return '확인 중'
+  }
+}
+
+function LicenseSettingsPanel() {
+  const [licenseKey, setLicenseKey] = useState<string | null>(null)
+  const [status, setStatus] = useState<LicensePanelStatus | null>({ state: 'loading' })
+  const [newKey, setNewKey] = useState('')
+  const [devices, setDevices] = useState<LicenseDeviceRow[]>([])
+  const [currentDeviceId, setCurrentDeviceId] = useState<string | null>(null)
+  const [maxDevices, setMaxDevices] = useState(DEFAULT_MAX_LICENSE_DEVICES)
+  const [loading, setLoading] = useState(false)
+  const [activating, setActivating] = useState(false)
+  const [removing, setRemoving] = useState<string | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const loadLicense = useCallback(async () => {
+    const api = (window as any).electronAPI?.license
+    if (!api) return
+    setLoading(true)
+    setError(null)
+    try {
+      const [rawStatus, cachedKey] = await Promise.all([
+        api.getInitialStatus?.() ?? api.verify?.(),
+        api.getCachedKey?.(),
+      ])
+      setStatus(rawStatus ?? { state: 'no_license' })
+      setLicenseKey(cachedKey ?? null)
+      if (typeof rawStatus?.max_devices === 'number') {
+        setMaxDevices(rawStatus.max_devices)
+      }
+
+      const list = await api.listDevices?.()
+      if (list?.ok) {
+        setDevices(Array.isArray(list.devices) ? list.devices : [])
+        setCurrentDeviceId(list.current_device_id ?? null)
+        if (typeof list.max_devices === 'number') setMaxDevices(list.max_devices)
+      } else if (list?.reason && list.reason !== 'no_license') {
+        setError(deviceReasonToMessage(list.reason))
+      } else {
+        setDevices([])
+        setCurrentDeviceId(null)
+      }
+    } catch (e: any) {
+      setError(e?.message || '라이센스 정보를 불러오지 못했습니다.')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadLicense()
+  }, [loadLicense])
+
+  const handleActivate = async () => {
+    const key = newKey.trim().toUpperCase()
+    if (!key) {
+      setError('교체할 라이센스 키를 입력해주세요.')
+      return
+    }
+    if (licenseKey && !window.confirm('현재 라이센스 키를 새 키로 교체할까요?')) return
+
+    const api = (window as any).electronAPI?.license
+    if (!api?.activate) return
+    setActivating(true)
+    setError(null)
+    setMessage(null)
+    try {
+      const result = await api.activate(key)
+      setStatus(result)
+      if (result?.state === 'ok' || result?.state === 'offline_grace') {
+        setNewKey('')
+        setMessage('라이센스 키를 교체했습니다.')
+        await loadLicense()
+      } else if (result?.state === 'device_limit_reached') {
+        setMaxDevices(result.max_devices ?? DEFAULT_MAX_LICENSE_DEVICES)
+        setDevices(Array.isArray(result.devices) ? result.devices : [])
+        setError(`기기 등록 한도에 도달했습니다. 최대 ${result.max_devices ?? DEFAULT_MAX_LICENSE_DEVICES}대까지 사용할 수 있습니다.`)
+      } else {
+        setError(`활성화에 실패했습니다. (${result?.reason || result?.state || 'unknown'})`)
+      }
+    } catch (e: any) {
+      setError(e?.message || '활성화에 실패했습니다.')
+    } finally {
+      setActivating(false)
+    }
+  }
+
+  const handleRemoveDevice = async (deviceId: string) => {
+    if (currentDeviceId && deviceId === currentDeviceId) {
+      setError('현재 사용 중인 기기는 삭제할 수 없습니다.')
+      return
+    }
+    const target = devices.find((d) => d.device_id === deviceId)
+    const label = target?.device_name || deviceId
+    if (!window.confirm(`${label} 기기 등록을 해제할까요?`)) return
+
+    const api = (window as any).electronAPI?.license
+    if (!api?.removeDevice) return
+    setRemoving(deviceId)
+    setError(null)
+    setMessage(null)
+    try {
+      const result = await api.removeDevice(deviceId)
+      if (!result?.ok) {
+        setError(deviceReasonToMessage(result?.reason) || '기기 해제에 실패했습니다.')
+        return
+      }
+      setMessage('기기 등록을 해제했습니다.')
+      await loadLicense()
+    } catch (e: any) {
+      setError(e?.message || '기기 해제에 실패했습니다.')
+    } finally {
+      setRemoving(null)
+    }
+  }
+
+  const expiresAt = status?.state === 'ok' || status?.state === 'offline_grace' ? status.expires_at : null
+
+  return (
+    <div className="space-y-8 max-w-2xl">
+      <section>
+        <h3 className="text-sm font-semibold text-text mb-4 uppercase tracking-wider">라이센스</h3>
+        <div className="bg-bg-secondary p-5 rounded-xl border border-transparent space-y-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="text-xs text-text-tertiary uppercase tracking-wider">현재 라이센스 키</div>
+              <div className="mt-1 font-mono text-sm text-text break-all">
+                {licenseKey || '등록된 라이센스가 없습니다'}
+              </div>
+            </div>
+            <div className={`shrink-0 text-xs font-semibold px-2.5 py-1 rounded-full ${status?.state === 'ok' || status?.state === 'offline_grace'
+              ? 'bg-green-100 text-green-700 border border-green-200'
+              : 'bg-yellow-100 text-yellow-700 border border-yellow-200'
+            }`}>
+              {licenseStateLabel(status)}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-lg bg-bg px-3 py-2.5">
+              <div className="text-[10px] text-text-tertiary uppercase tracking-wider">만료일</div>
+              <div className="mt-1 text-sm text-text">{formatOptionalDate(expiresAt)}</div>
+            </div>
+            <div className="rounded-lg bg-bg px-3 py-2.5">
+              <div className="text-[10px] text-text-tertiary uppercase tracking-wider">기기 등록</div>
+              <div className="mt-1 text-sm text-text">{devices.length}/{maxDevices}대</div>
+            </div>
+          </div>
+
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={newKey}
+              onChange={(e) => setNewKey(e.target.value.toUpperCase())}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !activating && newKey.trim()) void handleActivate()
+              }}
+              placeholder="INSRT-XXXX-XXXX-XXXX-XXXX"
+              maxLength={25}
+              spellCheck={false}
+              className="flex-1 min-w-0 px-3 py-2.5 rounded-lg bg-bg border border-transparent font-mono text-sm text-text focus:border-accent focus:ring-1 focus:ring-accent outline-none transition-all shadow-sm"
+            />
+            <button
+              type="button"
+              onClick={handleActivate}
+              disabled={activating || !newKey.trim()}
+              className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-text text-bg rounded-lg text-sm font-medium hover:bg-text/90 transition-colors disabled:opacity-50"
+            >
+              {activating && <Loader2 size={14} className="animate-spin" />}
+              교체
+            </button>
+            <button
+              type="button"
+              onClick={() => void loadLicense()}
+              disabled={loading}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-bg border border-border text-text-secondary hover:text-text hover:bg-bg-tertiary transition-colors disabled:opacity-50"
+              title="새로고침"
+            >
+              <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+            </button>
+          </div>
+
+          {message && <div className="rounded-lg bg-accent-light px-3 py-2 text-xs text-accent">{message}</div>}
+          {error && <div className="rounded-lg bg-danger-light px-3 py-2 text-xs text-danger">{error}</div>}
+        </div>
+      </section>
+
+      <section>
+        <h3 className="text-sm font-semibold text-text mb-4 uppercase tracking-wider">등록 기기</h3>
+        <div className="bg-bg-secondary rounded-xl border border-transparent overflow-hidden">
+          {loading && devices.length === 0 ? (
+            <div className="flex items-center gap-2 p-5 text-sm text-text-secondary">
+              <Loader2 size={16} className="animate-spin" />
+              기기 목록 불러오는 중
+            </div>
+          ) : devices.length === 0 ? (
+            <div className="p-8 text-center text-sm text-text-tertiary">
+              등록된 기기 목록이 없습니다.
+            </div>
+          ) : (
+            <div className="divide-y divide-border">
+              {devices.map((device) => {
+                const isSelf = device.device_id === currentDeviceId
+                return (
+                  <div key={device.device_id} className="p-4 flex items-start gap-3">
+                    <div className={`p-2 rounded-lg ${isSelf ? 'bg-accent-light text-accent' : 'bg-bg text-text-tertiary'}`}>
+                      <Laptop size={18} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <div className="font-medium text-sm text-text truncate">
+                          {device.device_name || '이름 없음'}
+                        </div>
+                        {isSelf && (
+                          <span className="shrink-0 rounded bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent">
+                            현재 기기
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-text-tertiary mt-0.5">
+                        {device.device_os || '운영체제 알 수 없음'}
+                      </div>
+                      <div className="font-mono text-[10px] text-text-tertiary truncate mt-1">
+                        {device.device_id}
+                      </div>
+                      <div className="text-[10px] text-text-tertiary mt-1">
+                        마지막 사용: {formatOptionalDate(device.last_seen_at)}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveDevice(device.device_id)}
+                      disabled={isSelf || removing === device.device_id}
+                      title={isSelf ? '현재 사용 중인 기기는 삭제할 수 없습니다' : '기기 등록 해제'}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-danger-light hover:text-danger disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-text-tertiary"
+                    >
+                      {removing === device.device_id ? (
+                        <Loader2 size={15} className="animate-spin" />
+                      ) : (
+                        <Trash2 size={15} />
+                      )}
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function deviceReasonToMessage(reason?: string): string | null {
+  switch (reason) {
+    case 'no_license':
+      return '등록된 라이센스가 없습니다.'
+    case 'cannot_remove_self':
+      return '현재 사용 중인 기기는 삭제할 수 없습니다.'
+    case 'network_error':
+      return '서버에 연결할 수 없습니다. 네트워크 상태를 확인해주세요.'
+    case 'device_mismatch':
+      return '이 기기에서 사용할 수 없는 라이센스입니다.'
+    default:
+      return reason ? `요청에 실패했습니다. (${reason})` : null
+  }
+}
 
 export function SettingsModal() {
   const { activeModal, closeModal, theme, setTheme, modalData } = useUIStore()
@@ -173,6 +518,13 @@ export function SettingsModal() {
   const [activeAiTab, setActiveAiTab] = useState<AiTab>('chat')
   const [apiKeyInput, setApiKeyInput] = useState('')
   const isOpen = activeModal === 'settings'
+  const appVersion = (() => {
+    try {
+      return window.electronAPI?.getVersion?.() || '1.0.0'
+    } catch {
+      return '1.0.0'
+    }
+  })()
 
   // 충전 이후 사용 기록 (rechargeDate 기준)
   const currentChargeHistory = rechargeDate
@@ -260,6 +612,7 @@ export function SettingsModal() {
 
   const tabs: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
     { id: 'general', label: '일반', icon: <Settings size={20} /> },
+    { id: 'license', label: '라이센스', icon: <ShieldCheck size={20} /> },
     { id: 'ai', label: '모델 및 AI', icon: <Sparkles size={20} /> },
     { id: 'usage', label: '사용량', icon: <BarChart3 size={20} /> },
   ]
@@ -295,7 +648,7 @@ export function SettingsModal() {
             ))}
 
             <div className="mt-auto px-3 text-xs text-text-tertiary">
-              v1.0.0 (Beta)
+              v{appVersion.replace(/-beta(?:\.\d+)?$/i, '')}
             </div>
           </div>
           {/* Main Content */}
@@ -395,12 +748,12 @@ export function SettingsModal() {
                     </div>
                   </section>
 
-                  {/* Diagnostic Data Consent (Beta) */}
+                  {/* Diagnostic Data Consent */}
                   <section>
                     <h3 className="text-sm font-semibold text-text mb-4 uppercase tracking-wider">개인정보</h3>
                     <div className="flex items-center justify-between gap-4 bg-bg-secondary p-5 rounded-xl border border-transparent">
                       <div className="min-w-0">
-                        <div className="font-medium text-text">익명 진단 데이터 제공 동의 (베타 품질 개선)</div>
+                        <div className="font-medium text-text">익명 진단 데이터 제공 동의</div>
                         <div className="text-xs text-text-tertiary mt-1">
                           편집 품질 개선을 위해 식별 정보를 제외한 익명 진단 데이터를 전송합니다. 언제든지 끌 수 있습니다.
                         </div>
@@ -424,12 +777,14 @@ export function SettingsModal() {
                 </div>
               )}
 
+              {activeTab === 'license' && <LicenseSettingsPanel />}
+
               {activeTab === 'ai' && (
                 <div className="space-y-8 max-w-2xl">
                   <section>
                     <h3 className="text-sm font-semibold text-text mb-4 uppercase tracking-wider">연결 모드</h3>
                     <div className="bg-bg-secondary p-5 rounded-xl border border-transparent space-y-3">
-                      {BETA_CODEX_ONLY ? (
+                      {CODEX_ONLY_MODE ? (
                         <>
                           <p className="text-sm text-text-secondary"><strong>Codex CLI 모드</strong> — ChatGPT 구독 계정으로 로그인하시면 별도 API 결제 없이 사용 가능합니다.</p>
                           <CodexStatusPanel />
@@ -457,7 +812,7 @@ export function SettingsModal() {
                     </div>
                   </section>
 
-                  {!BETA_CODEX_ONLY && (
+                  {!CODEX_ONLY_MODE && (
                   <section>
                     <h3 className="text-sm font-semibold text-text mb-4 uppercase tracking-wider">OpenAI API Key</h3>
                     <div className="bg-bg-secondary p-5 rounded-xl border border-transparent space-y-4">
@@ -502,7 +857,7 @@ export function SettingsModal() {
                   </section>
                   )}
 
-                  {!BETA_CODEX_ONLY && (
+                  {!CODEX_ONLY_MODE && (
                   <section>
                     <h3 className="text-sm font-semibold text-text mb-4 uppercase tracking-wider">모델 선택</h3>
                     <div className="inline-flex p-1 bg-bg-secondary rounded-xl border border-transparent">

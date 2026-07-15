@@ -176,32 +176,6 @@ def _build_rejected_ops(selected_text: Optional[str], selection_range: Optional[
     return ops
 
 
-def _emit_response_decision(decision: str, result: Dict[str, Any]) -> None:
-    """베타 trace: accept/reject 결과를 response_decision 이벤트로 emit (telemetry only).
-
-    반환값/제어흐름에 절대 영향 없음 — 전체 try/except 로 감쌈.
-    counts 는 결과 dict 에서 .get 으로 매핑 (없으면 None).
-    """
-    try:
-        from services.beta_trace import get_session
-        s = get_session()
-        if s is None:
-            return
-        delta_count = result.get("count")
-        if delta_count is None:
-            delta_count = result.get("processed")
-        rejected_ops = result.get("rejectedOps")
-        failed_count = len(rejected_ops) if rejected_ops else None
-        s.response_decision(
-            decision=decision,
-            chat_id=None,
-            delta_count=delta_count,
-            failed_count=failed_count,
-        )
-    except Exception as e:
-        print(f"[beta_trace] response_decision hook failed: {e}", file=sys.stderr)
-
-
 def cache_track_change_selection(connector) -> Dict[str, Any]:
     """선택 범위 캐싱만 수행 (커서 이동/전체 변경 탐색 없음)"""
     try:
@@ -309,7 +283,6 @@ def apply_all_changes(connector) -> Dict[str, Any]:
             "hasRemaining": has_remaining,
             "autoComplete": not has_remaining
         }
-        _emit_response_decision("accept", result)
         return result
     except Exception as e:
         print(f"apply_all_changes 실패: {e}", file=sys.stderr)
@@ -363,7 +336,6 @@ def reject_all_changes(connector) -> Dict[str, Any]:
             "extractionQuality": extraction_quality,
             "rejectedOps": rejected_ops
         }
-        _emit_response_decision("reject", result)
         return result
     except Exception as e:
         print(f"reject_all_changes 실패: {e}", file=sys.stderr)
@@ -427,7 +399,6 @@ def apply_selected_changes(connector) -> Dict[str, Any]:
             "autoComplete": auto_complete,
             "showToast": show_toast
         }
-        _emit_response_decision("partial_accept", result)
         return result
     except Exception as e:
         print(f"apply_selected_changes 실패: {e}", file=sys.stderr)
@@ -509,7 +480,6 @@ def reject_selected_changes(connector) -> Dict[str, Any]:
             "extractionQuality": extraction_quality,
             "rejectedOps": rejected_ops
         }
-        _emit_response_decision("partial_accept", result)
         return result
     except Exception as e:
         print(f"reject_selected_changes 실패: {e}", file=sys.stderr)

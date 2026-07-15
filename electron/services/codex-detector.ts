@@ -112,13 +112,66 @@ function checkCodexInstalled(): Promise<boolean> {
   })
 }
 
+/** Node.js 설치 상태 */
+export interface NodeStatus {
+  installed: boolean
+  version?: string
+  /** npm 명령 사용 가능 한지 */
+  hasNpm: boolean
+}
+
+/**
+ * Node.js + npm 설치 여부 확인.
+ *
+ * Codex CLI 설치 (`npm install -g @openai/codex`) 의 사전 조건.
+ * Node.js 없으면 npm 도 없음 → 사용자 에게 Node.js 다운로드 안내 필요.
+ */
+export function checkNodeInstalled(): Promise<NodeStatus> {
+  return new Promise((resolve) => {
+    execFile('node', ['--version'], { timeout: 5000, shell: true }, (nodeErr, nodeOut) => {
+      if (nodeErr) {
+        resolve({ installed: false, hasNpm: false })
+        return
+      }
+      const version = nodeOut.trim()
+      // npm 도 확인 (드물게 node 만 있고 npm 없는 케이스)
+      execFile('npm', ['--version'], { timeout: 5000, shell: true }, (npmErr) => {
+        resolve({ installed: true, version, hasNpm: !npmErr })
+      })
+    })
+  })
+}
+
 /**
  * Codex CLI 전체 상태 감지
  *
  * 1. codex --version으로 설치 확인
  * 2. ~/.codex/auth.json에서 인증 정보 추출
+ *
+ * E2E override: `INSERTY_CODEX_E2E_OVERRIDE` env 변수 가 설정된 경우
+ *   "needs_install" → installed=false 강제
+ *   "needs_login"   → installed=true, authenticated=false 강제
+ *   "all_done"      → installed=true, authenticated=true (dummy auth)
+ *   일반 사용자 환경 에서는 이 env 안 설정 → 정상 detect.
  */
 export async function detectCodex(): Promise<CodexStatus> {
+  // ─── E2E override (사용자 환경 무관 검증용) ────────────────────
+  const override = process.env.INSERTY_CODEX_E2E_OVERRIDE
+  if (override === 'needs_install') {
+    return { installed: false, reason: 'E2E: 강제 미설치' }
+  }
+  if (override === 'needs_login') {
+    return { installed: true, authenticated: false, reason: 'E2E: 강제 미로그인' }
+  }
+  if (override === 'all_done') {
+    return {
+      installed: true,
+      authenticated: true,
+      auth: { apiKey: 'e2e-dummy-token', authType: 'oauth' },
+    }
+  }
+  // ────────────────────────────────────────────────────────────────
+
   const installed = await checkCodexInstalled()
   if (!installed) {
     return {

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import openAiModels from '../config/openai-models.json'
-import { BETA_CODEX_ONLY } from '../config/beta'
+import { CODEX_ONLY_MODE } from '../config/release'
 
 export interface UsageRecord {
   id: string
@@ -37,7 +37,7 @@ interface SettingsState {
   promptCustomRules: string
   promptFullOverride: string
 
-  // Diagnostic data consent (beta quality improvement)
+  // Diagnostic data consent
   diagnosticConsent: boolean
 
   // Actions - Text Size
@@ -111,7 +111,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   openaiApiKey: null,
   openaiDefaultModel: openAiModels.defaultModel || 'gpt-5.1',
   openaiEmbeddingModel: openAiModels.defaultEmbeddingModel || 'text-embedding-3-small',
-  connectionMode: BETA_CODEX_ONLY ? 'codex' : 'api',
+  connectionMode: CODEX_ONLY_MODE ? 'codex' : 'api',
   email: null,
   promptCustomEnabled: false,
   promptCustomRules: '',
@@ -301,7 +301,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
       openaiEmbeddingModel: typeof settings.openai_embedding_model === 'string'
         ? settings.openai_embedding_model
         : (openAiModels.defaultEmbeddingModel || 'text-embedding-3-small'),
-      connectionMode: BETA_CODEX_ONLY
+      connectionMode: CODEX_ONLY_MODE
         ? 'codex' as const
         : (settings.connection_mode === 'codex' ? 'codex' as const : 'api' as const),
       promptCustomEnabled: typeof settings.prompt_custom_enabled === 'boolean'

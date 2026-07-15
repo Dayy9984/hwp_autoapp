@@ -18,12 +18,8 @@ export function KakaoSupportLink({
   className = '',
 }: Props) {
   const handleClick = () => {
-    const api = (window as any).electronAPI?.license?.openExternal
-    if (typeof api === 'function') {
-      api(KAKAO_OPEN_CHAT)
-    } else {
-      window.open(KAKAO_OPEN_CHAT, '_blank')
-    }
+    // main 프로세스의 setWindowOpenHandler 가 https URL 을 외부 브라우저로 연다.
+    window.open(KAKAO_OPEN_CHAT, '_blank')
   }
 
   return (

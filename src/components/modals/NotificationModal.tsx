@@ -73,10 +73,7 @@ export function NotificationModal({
       if (onAction) {
         await onAction(notification)
       } else if (notification.actionUrl) {
-        const api = typeof window !== 'undefined' ? window.electronAPI : undefined
-        if (api?.update?.download) {
-          await api.update.download()
-        } else if (typeof window !== 'undefined') {
+        if (typeof window !== 'undefined') {
           window.open(notification.actionUrl, '_blank', 'noopener,noreferrer')
         }
       }

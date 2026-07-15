@@ -232,9 +232,32 @@ def _collect_chars_excluding_tables(node: ET.Element) -> str:
 
 
 def _extract_cell_text(cell_elem: ET.Element) -> str:
+    """부모 cell 의 직접 text 만 추출 — nested TABLE 안 의 PARALIST 는 제외.
+
+    BUG fix (beta.11): 이전 = ``cell_elem.iter()`` 으로 deep iter → nested
+    TABLE 의 label cell 의 PARALIST 도 포함 → 부모 cell 의 preview_text 에
+    "업 력 / 주요상품/서비스 / ..." 같은 nested label 들 이 join 되어 LLM
+    에게 = nested 의 답 cell 들 specify 불가 → ``replace_cell_content`` 으로
+    nested TABLE 통째 파괴.
+
+    fix: nested TABLE 의 ancestor 안 의 PARALIST 는 skip.
+    """
+    # nested TABLE 안 의 모든 element 의 set 구성
+    nested_descendants: set = set()
+    for child in cell_elem.iter():
+        if child is cell_elem:
+            continue
+        if _local_name(child.tag).strip().upper() != "TABLE":
+            continue
+        for sub in child.iter():
+            nested_descendants.add(id(sub))
+
     paragraphs: List[str] = []
     for para_list in cell_elem.iter():
         if _local_name(para_list.tag).strip().upper() != "PARALIST":
+            continue
+        # nested TABLE 안 의 PARALIST 는 skip
+        if id(para_list) in nested_descendants:
             continue
         for paragraph in list(para_list):
             if _local_name(paragraph.tag).strip().upper() != "P":

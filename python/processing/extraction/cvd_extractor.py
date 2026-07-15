@@ -954,11 +954,15 @@ class CVDExtractor:
     def _extract_color_from_elem(self, elem: ET.Element) -> Optional[str]:
         if elem is None:
             return None
+        # HWPML 의 fill color 의 정확 한 attribute 들 = FaceColor / FillColor / BackColor 등.
+        # HatchColor 는 = 해치 패턴 의 색상 = 보조 정보, 우선 순위 낮음.
         for key, val in elem.attrib.items():
             key_lower = key.lower()
             if key_lower in (
+                "facecolor",       # WINDOWBRUSH 의 주요 색상 (HWPML 표준)
                 "fillcolor",
                 "backcolor",
+                "background",
                 "color",
                 "colorref",
                 "rgb",
@@ -967,8 +971,15 @@ class CVDExtractor:
                 parsed = self._parse_color_value(val)
                 if parsed:
                     return parsed
+        # HatchColor 가 0 이 아닌 경우 = 해치 패턴 의 색 (= fallback)
+        if "hatchcolor" in {k.lower() for k in elem.attrib}:
+            hc = next((v for k, v in elem.attrib.items() if k.lower() == "hatchcolor"), None)
+            if hc and hc not in ("0", 0):
+                parsed = self._parse_color_value(hc)
+                if parsed:
+                    return parsed
         tag_lower = self._strip_ns(elem.tag).lower()
-        if tag_lower in ("color", "colorref", "fillcolor", "backcolor") and elem.text:
+        if tag_lower in ("color", "colorref", "fillcolor", "backcolor", "facecolor") and elem.text:
             parsed = self._parse_color_value(elem.text)
             if parsed:
                 return parsed

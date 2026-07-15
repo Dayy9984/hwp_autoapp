@@ -26,6 +26,25 @@ class ROTAccessManager:
             return None
 
     @staticmethod
+    def _is_hwp_legacy_buggy(hwp_instance) -> bool:
+        """HWP 2018 (Version "10,...") detect — XHwpWindows.Item(i).WindowHandle 호출 시
+        active document 가 빈 문서 로 toggle 되는 buggy 동작. 호출 자체 회피 필요.
+
+        측정 (32bit Python + 사용자 양식 hwp 환경):
+          - HWP 2018 (Version "10, 0, 0, 5060") = WindowHandle 호출 1 회 만 으로 toggle
+          - HWP 2020 (Version "11, ...")        = 정상 동작
+          - HWP 2024 (Version "13, ...")        = 정상 동작
+
+        Returns:
+            bool: True 이면 WindowHandle 호출 skip 필요 (HWP 2018), False 이면 정상 호출
+        """
+        try:
+            v = str(getattr(hwp_instance, 'Version', '')).strip()
+            return v.startswith("10,")
+        except Exception:
+            return False
+
+    @staticmethod
     def _enumerate_hwp_instances() -> List[object]:
         """ROT에서 사용 가능한 HWP COM 인스턴스를 모두 열거한다."""
         instances: List[object] = []
@@ -108,6 +127,14 @@ class ROTAccessManager:
             if not ROTAccessManager.verify_hwp_instance(instance):
                 continue
             valid_instances.append(instance)
+
+            # HWP 2018 (Version "10,...") = XHwpWindows.Item(i).WindowHandle 호출 자체 가
+            # active document 를 빈 문서 로 toggle 시키는 buggy 동작. 호출 자체 회피 필수.
+            # measurement 실증: WindowHandle 호출 1회 만 으로 양식 hwp → 빈 문서 1 전환,
+            # 후속 호출 마다 빈 문서 N ↔ N+1 toggle (사용자 보고 "왔다갔다" 의 정확 메커니즘).
+            # → HWP 2018 일 때 매칭 loop 자체 skip → valid_instances fallback (line 136-137) 으로 진행.
+            if ROTAccessManager._is_hwp_legacy_buggy(instance):
+                continue
 
             try:
                 windows = instance.XHwpWindows

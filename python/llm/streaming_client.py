@@ -974,6 +974,7 @@ class OpenAIStreamingClient:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         token_usage = {"input": 0, "output": 0, "total": 0}
         response_id = None
+
         status = "unknown"
         buffer = ""
 
@@ -1373,6 +1374,7 @@ class OpenAIStreamingClient:
                             debug(f"[STREAMING] usage: in={token_usage['input']}, out={token_usage['output']}, total={token_usage['total']}")
                         else:
                             debug(f"[STREAMING] response.completed에 usage 없음")
+
                     continue
 
                 # 응답 실패/불완전 종료 (token_usage 추출 시도)

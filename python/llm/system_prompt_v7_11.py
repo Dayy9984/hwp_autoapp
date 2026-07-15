@@ -409,6 +409,19 @@ DOCUMENT_ANALYSIS_FRAMEWORK_V711 = r"""
 - 라벨 셀의 우측 또는 하단에 위치
 - 라벨에 `bgcolor`가 있으나 해당 셀에는 없는 경우
 
+**단위 placeholder 셀 — 단위 보존 필수** (`data-role="unit-placeholder"`):
+- 기존 텍스트가 "(㎡)", "(원)", "(명)", "(개)" 같은 단위 표기만 인 셀
+- ❌ 금지: `replace_cell_content` 으로 단순 값 만 작성 ("82") → 단위 사라짐
+- ✅ 필수: 답 작성 시 = 단위 보존 ("82 (㎡)", "185,000,000 (원)") 또는 = 답 + 기존 단위 join 으로 "82㎡"
+- `data-role="unit-placeholder"` attribute 가 있는 td 는 = **반드시 기존 단위 텍스트 보존 후 답 prefix**
+
+**textbox 와 paragraph 의 매핑** (양식 의 box / line / 사진 자리):
+- ENRICHED 의 `<textbox id="N">` = HWP 의 SHAPEOBJECT (= 그림 box, line, 사진 자리 placeholder)
+- textbox 의 옆 또는 안 의 빈 paragraph (= `<p id="M" color="#a6a6a6">` 같은 회색 hint) = **답 들어갈 위치**
+- ❌ 금지: textbox 자체 의 id 으로 replace 시도 (= 그림 box 자체 = 편집 불가)
+- ✅ 권장: textbox 사이 의 빈 paragraph 의 id 으로 replace_paragraph 으로 답 기입
+- 패턴: `<textbox><p label><textbox><p value (회색)>` 의 group = label 다음 의 회색 p 가 = 답 위치
+
 **안내문 판별 — 두 가지 유형 구분 필수**:
 
 유형 A — **삭제 후 기입** (안내문 자체가 입력 공간):

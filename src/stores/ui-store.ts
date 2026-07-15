@@ -14,6 +14,7 @@ export type ModalId =
   | 'tool-edit'
   | 'prompt-custom'
   | 'prompt-full'
+  | 'codex-setup'
   | null
 
 export type PopoverId =

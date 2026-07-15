@@ -2,9 +2,6 @@ import { useEffect, useRef, useState } from 'react'
 import { useTrackChangesStore } from '../stores/track-changes-store'
 import { useChatStore } from '../stores/chat-store'
 import { Check, X, CheckSquare, XSquare } from 'lucide-react'
-import { useBetaSurveyStore } from '../stores/beta-survey-store'
-import { IS_BETA } from '../config/beta'
-import { track } from '../lib/telemetry'
 
 const normalizeMatchText = (value: string) =>
   value
@@ -185,11 +182,6 @@ export function TrackChangeButtons({ isEmbedded = false }: TrackChangeButtonsPro
       const result = await window.electronAPI.trackChanges.applyAll()
       console.log('[TrackChangeButtons] ApplyAll result:', result)
 
-      if (IS_BETA && result?.success) {
-        track('delta_accepted', { mode: 'all' })
-        useBetaSurveyStore.getState().recordAccept()
-      }
-
       if (result.autoComplete) {
         reset()
       } else {
@@ -220,11 +212,6 @@ export function TrackChangeButtons({ isEmbedded = false }: TrackChangeButtonsPro
       if (result.fact?.mismatch) {
         setShowToast(true, '문서가 변경되었습니다. 다시 시도해주세요.')
         return
-      }
-
-      if (IS_BETA && result.fact?.success) {
-        track('delta_rejected', { mode: 'all' })
-        useBetaSurveyStore.getState().recordReject()
       }
 
       if (result.fact?.success && chatId && docKey) {
@@ -266,12 +253,6 @@ export function TrackChangeButtons({ isEmbedded = false }: TrackChangeButtonsPro
       const result = await window.electronAPI.trackChanges.applySelected()
       console.log('[TrackChangeButtons] ApplySelected result:', result)
 
-      // 부분(선택) 승인은 telemetry 만 보내고 피드백 toast 는 띄우지 않음
-      // (사용자 작업 중간 흐름 방해 X).
-      if (IS_BETA && !result?.showToast) {
-        track('delta_accepted', { mode: 'selected' })
-      }
-
       if (result.showToast) {
         setShowToast(true)
       }
@@ -296,11 +277,6 @@ export function TrackChangeButtons({ isEmbedded = false }: TrackChangeButtonsPro
       if (result.fact?.mismatch) {
         setShowToast(true, '문서가 변경되었습니다. 다시 시도해주세요.')
         return
-      }
-
-      // 부분(선택) 거절도 telemetry 만, 피드백 toast 는 띄우지 않음.
-      if (IS_BETA && result.fact?.success) {
-        track('delta_rejected', { mode: 'selected' })
       }
 
       if (result.showToast) {

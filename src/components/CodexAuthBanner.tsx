@@ -30,14 +30,19 @@ export function CodexAuthBanner() {
   if (!status) return null
   if (status.installed && status.authenticated) return null
 
-  const reason = !status.installed
-    ? 'Codex CLI 미설치'
+  const needsInstall = !status.installed
+  const label = needsInstall ? 'Codex 설치 필요' : 'Codex 로그인 필요'
+  const reason = needsInstall
+    ? '사용을 위해 Codex CLI 를 설치 하세요'
     : '인증 만료 또는 미로그인'
+  const buttonLabel = needsInstall ? '설치 하기' : '로그인'
+  const buttonTestId = needsInstall ? 'codex-banner-install' : 'codex-banner-login'
 
   return (
     <div
       role="alert"
       data-testid="codex-auth-banner"
+      data-state={needsInstall ? 'needs-install' : 'needs-login'}
       style={{
         position: 'fixed',
         top: 0,
@@ -56,10 +61,11 @@ export function CodexAuthBanner() {
     >
       <AlertCircle size={16} style={{ flexShrink: 0 }} />
       <div style={{ flex: 1, fontWeight: 500 }}>
-        Codex 로그인 필요 — <span style={{ fontWeight: 400, opacity: 0.92 }}>{reason}</span>
+        {label} — <span style={{ fontWeight: 400, opacity: 0.92 }}>{reason}</span>
       </div>
       <button
-        onClick={() => openModal('settings', { tab: 'ai' })}
+        data-testid={buttonTestId}
+        onClick={() => openModal('codex-setup')}
         style={{
           background: '#FFFFFF',
           color: '#C2410C',
@@ -71,7 +77,7 @@ export function CodexAuthBanner() {
           cursor: 'pointer',
         }}
       >
-        지금 로그인
+        {buttonLabel}
       </button>
     </div>
   )

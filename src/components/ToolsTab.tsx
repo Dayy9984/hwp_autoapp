@@ -66,7 +66,6 @@ export function ToolsTab({ isCollapsed = false }: ToolsTabProps) {
 
   // Get imported tools
   const promptCustomTool = tools.find((tool) => tool.type === 'prompt-custom')
-  const promptFullTool = tools.find((tool) => tool.type === 'prompt-full')
 
   if (isCollapsed) {
     return (
@@ -78,15 +77,6 @@ export function ToolsTab({ isCollapsed = false }: ToolsTabProps) {
             disabled={!canPartial}
           >
             <Sparkles size={18} />
-          </button>
-        )}
-        {promptFullTool && (
-          <button
-            onClick={() => canFull && openModal('prompt-full')}
-            className="p-2 rounded-lg bg-bg-tertiary text-text-secondary"
-            disabled={!canFull}
-          >
-            <ShieldCheck size={18} />
           </button>
         )}
       </div>
@@ -106,27 +96,16 @@ export function ToolsTab({ isCollapsed = false }: ToolsTabProps) {
         </button>
       </div>
 
-      {(promptCustomTool || promptFullTool) && (
+      {promptCustomTool && (
         <div className="space-y-3">
-          {promptCustomTool && (
-            <ToolCard
-              title="작성 커스텀"
-              description="문서 품질/규칙/문체를 부분적으로 추가합니다."
-              status={canPartial ? (customActive ? '사용 중' : '미설정') : '권한 필요'}
-              disabled={!canPartial}
-              icon={Sparkles}
-              onClick={() => openModal('prompt-custom')}
-            />
-          )}
-          {promptFullTool && (
-            <ToolCard
-              title="시스템 프롬프트 수정"
-              description="전체 시스템 프롬프트를 직접 교체합니다."
-              status={fullActive ? '사용 중' : '미설정'}
-              icon={ShieldCheck}
-              onClick={() => openModal('prompt-full')}
-            />
-          )}
+          <ToolCard
+            title="작성 커스텀"
+            description="문서 품질/규칙/문체를 부분적으로 추가합니다."
+            status={canPartial ? (customActive ? '사용 중' : '미설정') : '권한 필요'}
+            disabled={!canPartial}
+            icon={Sparkles}
+            onClick={() => openModal('prompt-custom')}
+          />
         </div>
       )}
     </div>

@@ -19,13 +19,6 @@ const availableTools: AvailableTool[] = [
     description: '문서 품질/규칙/문체를 부분적으로 추가합니다.',
     requiresScope: 'partial',
   },
-  {
-    name: '시스템 프롬프트 수정',
-    type: 'prompt-full',
-    icon: ShieldCheck,
-    description: '전체 시스템 프롬프트를 직접 교체합니다.',
-    requiresScope: 'full',
-  },
 ]
 
 export function ToolsImportView() {

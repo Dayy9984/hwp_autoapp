@@ -374,21 +374,26 @@ class DocumentProcessor:
                     print(f"[Python] _get_hwp_from_rot: 좀비 HWP 프로세스 감지 (창 없음), 무시", file=sys.stderr)
                     return None
 
-                # 창 개수는 있지만 실제 윈도우 핸들이 유효한지 확인
-                try:
-                    from ctypes import windll
-                    first_window = hwp_instance.XHwpWindows.Item(0)
-                    if first_window:
-                        hwnd = first_window.WindowHandle
-                        # Win32 API IsWindow로 창이 유효한지 확인
-                        is_valid = windll.user32.IsWindow(hwnd)
-                        if not is_valid:
-                            print(f"[Python] _get_hwp_from_rot: 좀비 HWP 프로세스 감지 (유효하지 않은 창 핸들), 무시", file=sys.stderr)
-                            return None
-                except Exception as e:
-                    # HWP 2018 can fail on XHwpWindows.Item(0).WindowHandle
-                    # while the ROT object and document collection are valid.
-                    print(f"[Python] _get_hwp_from_rot: WindowHandle 접근 실패: {e}, 계속 진행", file=sys.stderr)
+                # HWP 2018 (Version "10,...") = XHwpWindows.Item(0).WindowHandle 호출 시 active 가
+                # 빈 문서 로 toggle 되는 buggy 동작. Count 만 으로 좀비 검출 충분.
+                if ROTAccessManager._is_hwp_legacy_buggy(hwp_instance):
+                    pass  # HWP 2018: WindowHandle 호출 skip, Count 검증 으로 좀비 검출 종료
+                else:
+                    # 창 개수는 있지만 실제 윈도우 핸들이 유효한지 확인 (HWP 2020/2024)
+                    try:
+                        from ctypes import windll
+                        first_window = hwp_instance.XHwpWindows.Item(0)
+                        if first_window:
+                            hwnd = first_window.WindowHandle
+                            # Win32 API IsWindow로 창이 유효한지 확인
+                            is_valid = windll.user32.IsWindow(hwnd)
+                            if not is_valid:
+                                print(f"[Python] _get_hwp_from_rot: 좀비 HWP 프로세스 감지 (유효하지 않은 창 핸들), 무시", file=sys.stderr)
+                                return None
+                    except Exception as e:
+                        # HWP 2018 can fail on XHwpWindows.Item(0).WindowHandle
+                        # while the ROT object and document collection are valid.
+                        print(f"[Python] _get_hwp_from_rot: WindowHandle 접근 실패: {e}, 계속 진행", file=sys.stderr)
             except Exception as e:
                 print(f"[Python] _get_hwp_from_rot: XHwpWindows 확인 실패: {e}, 계속 진행", file=sys.stderr)
 
@@ -1014,20 +1019,25 @@ class DocumentProcessor:
                     print(f"[Python] 좀비 HWP 프로세스 감지 (창 없음), 무시", file=sys.stderr)
                     return documents
 
-                # 창 개수는 있지만 실제 윈도우 핸들이 유효한지 확인
-                try:
-                    from ctypes import windll
-                    first_window = hwp.XHwpWindows.Item(0)
-                    if first_window:
-                        hwnd = first_window.WindowHandle
-                        # Win32 API IsWindow로 창이 유효한지 확인
-                        is_valid = windll.user32.IsWindow(hwnd)
-                        if not is_valid:
-                            print(f"[Python] 좀비 HWP 프로세스 감지 (유효하지 않은 창 핸들), 무시", file=sys.stderr)
-                            return documents
-                except Exception as e:
-                    # HWP 2018 can fail on WindowHandle even for live documents.
-                    print(f"[Python] WindowHandle 접근 실패: {e}, 계속 진행", file=sys.stderr)
+                # HWP 2018 (Version "10,...") = WindowHandle 호출 시 active document toggle 부수효과.
+                # Count 만 으로 좀비 검출 + Item(0).WindowHandle 호출 skip.
+                if ROTAccessManager._is_hwp_legacy_buggy(hwp):
+                    pass  # HWP 2018: zombie 검출 종료
+                else:
+                    # 창 개수는 있지만 실제 윈도우 핸들이 유효한지 확인 (HWP 2020/2024)
+                    try:
+                        from ctypes import windll
+                        first_window = hwp.XHwpWindows.Item(0)
+                        if first_window:
+                            hwnd = first_window.WindowHandle
+                            # Win32 API IsWindow로 창이 유효한지 확인
+                            is_valid = windll.user32.IsWindow(hwnd)
+                            if not is_valid:
+                                print(f"[Python] 좀비 HWP 프로세스 감지 (유효하지 않은 창 핸들), 무시", file=sys.stderr)
+                                return documents
+                    except Exception as e:
+                        # HWP 2018 can fail on WindowHandle even for live documents.
+                        print(f"[Python] WindowHandle 접근 실패: {e}, 계속 진행", file=sys.stderr)
             except Exception as e:
                 print(f"[Python] XHwpWindows 확인 실패: {e}, 계속 진행", file=sys.stderr)
 
@@ -1503,29 +1513,9 @@ class DocumentProcessor:
             adapter = self._ensure_connector()
 
             if not adapter.open_file(file_path):
-                # beta trace: open 실패도 기록 (세션 시작 시도)
-                try:
-                    from services.beta_trace import start_session
-                    s = start_session(file_path)
-                    if s:
-                        s.extract("open", error_type="open_failed", error_msg="파일 열기 실패")
-                        s.flush()
-                except Exception:
-                    pass
                 return {"success": False, "error": "파일 열기 실패"}
 
             self._current_file = file_path
-
-            # beta trace: 새 세션 + R2 업로드 + open 단계 기록
-            try:
-                from services.beta_trace import start_session
-                import os
-                s = start_session(file_path)
-                if s:
-                    s.extract("open", doc_size_kb=int(os.path.getsize(file_path) / 1024))
-            except Exception as e:
-                # fire-and-forget — 본 작업 영향 X
-                print(f"[beta_trace] open hook failed: {e}", file=sys.stderr)
 
             return {"success": True, "file": file_path}
         except Exception as e:
@@ -2002,12 +1992,6 @@ class DocumentProcessor:
 
     def close_document(self) -> dict:
         """문서 닫기"""
-        # beta trace: 남은 큐 flush + 세션 종료
-        try:
-            from services.beta_trace import end_session
-            end_session()
-        except Exception:
-            pass
         try:
             if self._connector:
                 self._connector.disconnect()
@@ -3641,38 +3625,6 @@ class DocumentProcessor:
             connector = self._ensure_connector()
             hwp = connector.hwp
 
-            # 베타 trace: chat 사이클 시작 — 매번 새 session (이전 session 은 flush + 종료).
-            # session ID = 한 chat 사이클 단위로 D1 / R2 에 매핑.
-            try:
-                from services.beta_trace import get_session, start_session, end_session
-                # 이전 사이클이 비정상 종료된 경우 대비 — 잔존 session flush + 종료
-                prev = get_session()
-                if prev:
-                    try: prev.flush()
-                    except Exception: pass
-                end_session()
-                # 새 사이클 session 시작
-                active_path: Optional[str] = None
-                try:
-                    xdocs = hwp.XHwpDocuments
-                    active_doc = xdocs.Active_XHwpDocument
-                    full = getattr(active_doc, "FullName", "") if active_doc else ""
-                    active_path = full if isinstance(full, str) and full else None
-                except Exception:
-                    active_path = None
-                if not active_path and self._current_file:
-                    active_path = self._current_file
-                if active_path:
-                    s = start_session(active_path)
-                    if s:
-                        try:
-                            import os as _os
-                            s.extract("cycle_start", doc_size_kb=int(_os.path.getsize(active_path) / 1024))
-                        except Exception:
-                            pass
-            except Exception as e:
-                print(f"[beta_trace] prepare_context hook failed: {e}", file=sys.stderr)
-
             # 문서 인덱스가 있으면 활성화
             doc_index_value = self._coerce_int(doc_index)
             if doc_index_value is not None:
@@ -3799,8 +3751,6 @@ class DocumentProcessor:
 
             if block_manager:
                 try:
-                    import time as _t_beta
-                    _t0 = _t_beta.time()
                     document_graph = build_document_graph_from_hwpml(
                         hwpml_text=hwpml_text,
                         block_manager=block_manager,
@@ -3813,32 +3763,10 @@ class DocumentProcessor:
                         document_graph,
                         page_range=(actual_start, actual_end),
                     )
-                    # beta trace: cvd_step
-                    try:
-                        from services.beta_trace import get_session
-                        s = get_session()
-                        if s:
-                            blocks = document_graph.get("nodes", []) if isinstance(document_graph, dict) else []
-                            s.cvd(
-                                "serialize",
-                                duration_ms=int((_t_beta.time() - _t0) * 1000),
-                                cvd_chars=len(document_graph_json or ""),
-                                cvd_blocks=len(blocks) if isinstance(blocks, list) else None,
-                            )
-                    except Exception:
-                        pass
                 except Exception as graph_error:
                     print(f"[Python] document graph build failed: {graph_error}", file=sys.stderr)
                     document_graph = {}
                     document_graph_json = ""
-                    # beta trace: 실패
-                    try:
-                        from services.beta_trace import get_session
-                        s = get_session()
-                        if s:
-                            s.cvd("serialize", error_type=type(graph_error).__name__, error_msg=str(graph_error)[:300])
-                    except Exception:
-                        pass
 
             # target_uid <-> id 인덱스 캐시
             self._target_uid_to_id = {}
@@ -3957,25 +3885,6 @@ class DocumentProcessor:
             print(f"[Python] prepare_context 에러: {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
             return {"success": False, "error": str(e), "trace": traceback.format_exc()}
-
-    def _trace_block_cmd(self, *, command, target_id, applied, success, error_type=None):
-        """베타 trace: execute_delta 결과를 block_cmd 이벤트로 emit (telemetry only).
-
-        편집 동작/반환값/제어흐름에 절대 영향 없음 — 전체 try/except 로 감쌈.
-        """
-        try:
-            from services.beta_trace import get_session
-            s = get_session()
-            if s is not None:
-                s.block_cmd(
-                    command=str(command) if command else "unknown",
-                    target_id=str(target_id) if target_id is not None else None,
-                    applied=applied, success=success,
-                    request_id=getattr(self, "_verify_request_id", None),
-                    error_type=error_type,
-                )
-        except Exception as e:
-            print(f"[beta_trace] block_cmd hook failed: {e}", file=sys.stderr)
 
     def execute_delta(self, delta_data: dict) -> dict:
         """delta 형식 명령 실행 (executeMethod 패턴)
@@ -5920,52 +5829,6 @@ class DocumentProcessor:
                 "editHistory": self.get_edit_history()
             })
 
-            # 검증 파이프라인 트리거 (스펙 §5.2): diff 모드 + 실제 편집 발생 시
-            # 백그라운드 스레드로 렌더→비전→집계→전송. 본 작업/UI/반환값 절대 차단·변경 안 함.
-            # 전체 try/except — 어떤 실패도 finalize_edits 에 영향 0 (telemetry only).
-            #
-            # ⚠️ 실유저 기본 OFF: in-app verify 는 (1) 전체 문서 렌더(수초~수분, 무거운
-            #   문서는 hang), (2) 비전 API + 이미지 업로드, (3) STA COM 객체를 백그라운드
-            #   스레드에서 접근(크래시/렉 위험) — 실유저 UX 를 해칠 수 있다. 동일 verify
-            #   데이터는 내부 eval 하네스(eval.auto_eval)가 R2 corpus(실유저 문서)로 수집
-            #   하므로, 실유저 기기에서 돌릴 필요가 없다. 내부(팀/베타) 머신에서만
-            #   환경변수 INSERTY_VERIFY_INAPP=1 로 켠다. 가벼운 trace(block_cmd 등)는
-            #   이 게이트와 무관하게 그대로 동작(아래 finally 의 flush).
-            import os as _os
-            _verify_inapp = _os.environ.get("INSERTY_VERIFY_INAPP", "").strip().lower() in (
-                "1", "true", "yes", "on",
-            )
-            try:
-                if _verify_inapp and self._diff_mode_enabled and edits_count > 0:
-                    from services.verification_service import run_verification
-                    connector = self._ensure_connector()
-                    verify_hwp = getattr(connector, "hwp", connector)
-                    # 현재 trace 세션을 finally 의 end_session() 이전에 캡처해 스레드로 전달.
-                    # 캡처 세션은 _CURRENT_SESSION 이 nulled 된 뒤에도 자체 토큰으로 전송 가능 →
-                    # get_session() race 로 인한 verify telemetry 유실 방지.
-                    _vs = None
-                    try:
-                        from services.beta_trace import get_session
-                        _vs = get_session()
-                    except Exception:
-                        pass
-                    threading.Thread(
-                        target=run_verification,
-                        kwargs={
-                            "hwp": verify_hwp,
-                            "request_id": getattr(self, "_verify_request_id", None),
-                            "user_intent": getattr(self, "_verify_user_intent", None),
-                            "op_list": list(getattr(self, "_verify_ops", []) or []),
-                            "model": getattr(self, "_verify_model", "gpt-5.1"),
-                            "session": _vs,
-                            # 렌더 스코프(첫 N 페이지). 미설정이면 None(전체 문서, 기존 동작).
-                            "max_pages": getattr(self, "_verify_max_pages", None),
-                        },
-                        daemon=True,
-                    ).start()
-            except Exception as e:
-                print(f"[verification] finalize trigger failed: {e}", file=sys.stderr)
-
             # 최종 메시지 구성
             if messages:
                 final_message = "\n".join(messages)
@@ -5987,19 +5850,6 @@ class DocumentProcessor:
         finally:
             self._active_context_id = None
             self._cleanup_session_state()
-            # 베타 trace: chat 사이클 종료 — 큐 flush + 세션 종료.
-            # CVD/block_cmd 등 사이클 도중 누적된 trace 가 이 시점에 Worker 로 일괄 전송됨.
-            try:
-                from services.beta_trace import get_session, end_session
-                s = get_session()
-                if s:
-                    try: s.extract("cycle_end", duration_ms=None)
-                    except Exception: pass
-                    try: s.flush()
-                    except Exception: pass
-                end_session()
-            except Exception as e:
-                print(f"[beta_trace] finalize_edits hook failed: {e}", file=sys.stderr)
 
     def cancel_context(self, context_id: Optional[str] = None) -> dict:
         """현재 편집 컨텍스트를 무효화 (취소 시 사용)"""
@@ -6817,27 +6667,6 @@ def handle_request(processor: DocumentProcessor, request: dict) -> dict:
         if method == "ping":
             result["result"] = {"pong": True}
 
-        elif method == "beta:set_creds":
-            # Electron 이 라이센스 verify 토큰 + device_id 등록 / 갱신
-            try:
-                from services.beta_trace import set_credentials
-                result["result"] = set_credentials(
-                    params.get("token", ""),
-                    params.get("device_id", ""),
-                )
-            except Exception as e:
-                result["result"] = {"ok": False, "error": str(e)}
-
-        elif method == "consent:set":
-            # 설정 UI 동의 토글 → consent_record 이벤트 emit
-            try:
-                from services.beta_trace import get_session, start_session, _LICENSE_TOKEN, _DEVICE_ID, HwpTraceSession
-                s = get_session() or HwpTraceSession(_LICENSE_TOKEN, _DEVICE_ID, "", None)
-                s.consent_record(bool(params.get("consented")), "v1")
-                result["result"] = {"ok": True}
-            except Exception as e:
-                result["result"] = {"ok": False, "error": str(e)}
-
         elif method == "open":
             result["result"] = processor.open_document(params.get("file"))
 
@@ -7141,27 +6970,6 @@ def handle_request(processor: DocumentProcessor, request: dict) -> dict:
 
         elif method == "execute_delta":
             result["result"] = processor.execute_delta(params)
-            # 베타 trace: 결과 dict 기반으로 block_cmd applied/success emit (telemetry only).
-            # 반환값/제어흐름을 절대 변경하지 않음 — 전체 try/except.
-            try:
-                _delta_res = result["result"] if isinstance(result["result"], dict) else {}
-                _cmd = (
-                    params.get("method_type")
-                    or (params.get("metadata") or {}).get("operation")
-                    or params.get("action")
-                )
-                _tid = params.get("block_id") or params.get("id")
-                if _delta_res.get("edited") is True or _delta_res.get("replaced_count", 0) > 0:
-                    processor._trace_block_cmd(command=_cmd, target_id=_tid, applied=1, success=True)
-                elif _delta_res.get("skipped") is True:
-                    processor._trace_block_cmd(command=_cmd, target_id=_tid, applied=0, success=None)
-                else:
-                    processor._trace_block_cmd(
-                        command=_cmd, target_id=_tid, applied=0, success=False,
-                        error_type=_delta_res.get("error") or _delta_res.get("reason"),
-                    )
-            except Exception as _e:
-                print(f"[beta_trace] execute_delta dispatch hook failed: {_e}", file=sys.stderr)
 
         elif method == "finalize_edits":
             result["result"] = processor.finalize_edits(

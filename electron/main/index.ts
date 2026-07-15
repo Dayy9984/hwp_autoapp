@@ -54,7 +54,7 @@ import { getCvdBridge, CvdBridge } from '../services/cvd-bridge'
 import { getAgentBridge, AgentBridge } from '../services/agent-bridge'
 import { checkHwpCompatibility, ensureTypeLibRegistered, getCompatibilityStatus, runCompatibilityCheck, getLastCheckResult } from '../services/hwp-compatibility'
 import { getOpenAiSettings } from '../services/openai-settings'
-import { detectCodex, getCodexAuth } from '../services/codex-detector'
+import { detectCodex, getCodexAuth, checkNodeInstalled } from '../services/codex-detector'
 
 
 
@@ -77,14 +77,9 @@ import { generateDocumentKey, buildActiveKeyForComparison } from './document-key
 import { registerProjectHandlers } from './project-handlers'
 import { registerDbHandlers } from './db-handlers'
 import { registerMaintenanceHandlers } from './maintenance-handlers'
-import { registerUpdateHandlers, setUpdateMainWindow, startAutoUpdateCheck } from './update-handlers'
 import { registerLogHandlers } from './log-handlers'
-import { registerLicenseHandlers, initialLicenseCheck, getLastStatus, assertLicenseOk, licenseEvents } from './license-gate'
 import { getLogService } from '../services/log-service'
 import { dbManager } from '../services/db-manager'
-import { telemetry } from '../services/telemetry'
-import { announcementFetcher, registerAnnouncementHandlers } from '../services/announcement-fetcher'
-import { startBetaCredsPushLoop, pushBetaCredsNow } from '../services/beta-creds-push'
 
 
 
@@ -1051,9 +1046,6 @@ async function ensureMainWindowForRecovery(reason: string): Promise<BrowserWindo
   if (!win || win.isDestroyed()) {
     mainLog(`[Main] Main window missing - recreating (${reason})`)
     await createWindow()
-    if (win) {
-      setUpdateMainWindow(win)
-    }
   }
 
   if (!win || win.isDestroyed()) {
@@ -1067,9 +1059,6 @@ async function ensureMainWindowForRecovery(reason: string): Promise<BrowserWindo
     } catch {}
     win = null
     await createWindow()
-    if (win) {
-      setUpdateMainWindow(win)
-    }
   }
 
   if (!win || win.isDestroyed() || win.webContents.isDestroyed()) {
@@ -1865,58 +1854,8 @@ app.whenReady().then(async () => {
 
   registerDbHandlers()
   registerMaintenanceHandlers()
-  registerUpdateHandlers()
   registerLogHandlers()
   registerLifecycleGuards()
-  registerLicenseHandlers()
-
-  // 베타 텔레메트리 큐 시작 + app_launched 기록
-  telemetry.init()
-  telemetry.push('app_launched', { ts: Date.now() })
-  ipcMain.handle('telemetry:track', (_, eventType: string, payload?: Record<string, unknown>) => {
-    telemetry.push(eventType, payload)
-    return { ok: true }
-  })
-
-  // 베타 announcement 시스템 — 5분마다 fetch + dismissed 캐시.
-  announcementFetcher.init()
-  registerAnnouncementHandlers()
-
-  // 라이센스 초기 검증 — pending key 자동 활성화 + 캐시 토큰 검증
-  // BrowserWindow 생성 전에 결과가 결정되어야 렌더러가 getInitialStatus 호출 시
-  // 올바른 상태를 받는다. 네트워크 실패 시에도 verify()가 빠르게 offline_grace/blocked를
-  // 반환하므로 무한 대기는 없음.
-  ipcMain.handle('license:getInitialStatus', () => getLastStatus())
-
-  // 라이센스 ok → 차단 상태 전이 시: 진행 중인 chat stream 강제 cancel + renderer 통지.
-  // Frontend 의 onStatusChanged 리스너가 자동으로 LicenseGate 를 띄움.
-  licenseEvents.on('revoked', (_prev, next) => {
-    console.warn('[License] state revoked → cancelling active streams. next=', next?.state)
-    try {
-      if (activeChatCancelToken) activeChatCancelToken.cancelled = true
-    } catch {}
-    try {
-      agentBridge?.cancelStream().catch(() => {})
-    } catch {}
-    try {
-      if (win && !win.isDestroyed()) {
-        const stateUpper = (next?.state || 'blocked').toString().toUpperCase()
-        win.webContents.send('chat:progress', 'error', {
-          message: `LICENSE_${stateUpper}`,
-        })
-      }
-    } catch {}
-  })
-
-  try {
-    await initialLicenseCheck()
-  } catch (e) {
-    console.error('[License] initial check error:', e)
-  }
-
-  // 베타 trace creds — 라이센스 토큰을 Python 에 30분마다 푸시 (토큰 갱신 대응).
-  // ★ initialLicenseCheck 후로 이동: token cache 채워진 후에 첫 push 가 의미 있음.
-  startBetaCredsPushLoop()
 
   // 1. 스플래시 윈도우 먼저 생성 (즉시 표시)
   try {
@@ -1927,12 +1866,6 @@ app.whenReady().then(async () => {
 
   // 2. 메인 윈도우 생성 (백그라운드에서 로드)
   await createWindow()
-
-  // 자동 업데이트 서비스 초기화
-  if (win) {
-    setUpdateMainWindow(win)
-    startAutoUpdateCheck(60 * 60 * 1000) // 1시간 주기
-  }
 
   // v5.0: 프로젝트 관리 IPC 핸들러 등록
   registerProjectHandlers(
@@ -1961,17 +1894,6 @@ app.whenReady().then(async () => {
 
 
 app.on('window-all-closed', () => {
-  // 업데이트 진행 중에는 모든 창이 닫혀도 app.quit 안 함.
-  // (progress window 만 띄우려고 메인 창을 닫는 순간 quit 되면 안 되므로)
-  // quitAndInstall 호출 시점에 명시적으로 종료됨.
-  try {
-    const { isUpdatingNow } = require('./update-handlers')
-    if (isUpdatingNow && isUpdatingNow()) {
-      win = null
-      return
-    }
-  } catch {}
-
   win = null
   app.quit()
 })
@@ -2178,10 +2100,6 @@ ipcMain.handle('python:start', async () => {
 
 // Agent Bridge start (LLM process)
 ipcMain.handle('agent:start', async () => {
-  // B3: 라이센스 ok 아닐 때 agent process 자체를 띄우지 않음.
-  try { assertLicenseOk('agent:start') } catch (e: any) {
-    return { success: false, error: e?.message || 'LICENSE_BLOCKED' }
-  }
   if (!agentBridge || !agentBridge.isRunning()) {
     await initAgentBridge()
   }
@@ -2198,30 +2116,154 @@ ipcMain.handle('codex:status', async () => {
   }
 })
 
+// Node.js + npm 설치 확인 — Codex CLI 설치 의 사전 조건.
+ipcMain.handle('codex:check-node', async () => {
+  try {
+    return await checkNodeInstalled()
+  } catch (e) {
+    return { installed: false, hasNpm: false, error: String(e) }
+  }
+})
+
+// Node.js 다운로드 페이지 외부 브라우저 열기
+ipcMain.handle('codex:open-nodejs-download', async () => {
+  try {
+    await shell.openExternal('https://nodejs.org/en/download')
+    return { success: true }
+  } catch (e: any) {
+    return { success: false, error: e?.message || String(e) }
+  }
+})
+
+// Codex CLI 자동 설치 — `npm install -g @openai/codex` spawn + 진행 stream.
+//
+// 진행 stream: webContents.send('codex:install-progress', { type, text/code })
+//   type: 'stdout' | 'stderr' | 'done' | 'error'
+//
+// Node.js 미설치 시 즉시 error 반환 — 호출자 가 sequence: checkNode → installCli.
+ipcMain.handle('codex:install-cli', async (event) => {
+  // 사전 조건 — Node.js + npm
+  const node = await checkNodeInstalled()
+  if (!node.installed) {
+    return { success: false, error: 'NODE_NOT_INSTALLED', message: 'Node.js 가 설치되어 있지 않습니다.' }
+  }
+  if (!node.hasNpm) {
+    return { success: false, error: 'NPM_NOT_AVAILABLE', message: 'npm 명령을 찾을 수 없습니다.' }
+  }
+
+  return await new Promise<{ success: boolean; code?: number | null; error?: string }>((resolve) => {
+    const sender = event.sender
+    const send = (data: any) => {
+      try {
+        if (!sender.isDestroyed()) sender.send('codex:install-progress', data)
+      } catch { /* ignore */ }
+    }
+
+    let stdoutBuf = ''
+    let stderrBuf = ''
+
+    const child = nodeSpawn('npm', ['install', '-g', '@openai/codex'], {
+      shell: true,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      const text = chunk.toString('utf-8')
+      stdoutBuf += text
+      send({ type: 'stdout', text })
+    })
+    child.stderr?.on('data', (chunk: Buffer) => {
+      const text = chunk.toString('utf-8')
+      stderrBuf += text
+      send({ type: 'stderr', text })
+    })
+    child.on('error', (err) => {
+      send({ type: 'error', error: err.message })
+      resolve({ success: false, error: err.message })
+    })
+    child.on('close', (code) => {
+      const success = code === 0
+      send({ type: 'done', success, code })
+      resolve({ success, code, error: success ? undefined : stderrBuf.slice(-500) || stdoutBuf.slice(-500) })
+    })
+  })
+})
+
 // Codex CLI 로그인 — 외부 터미널 창에서 `codex login` 실행 (default OAuth 흐름).
 // 사용자는 새 창에서 1) ChatGPT OAuth (자연스러운 흐름) / 2) Device Code / 3) API key 중
 // 본인이 선택. ipcMain.handle 내부에서 capture 하면 stdin 입력이 불가능하므로 외부 창.
 //
 // require 가 ESM 빌드에서 ReferenceError 던지던 이전 버그 fix — `nodeSpawn` import 사용.
 ipcMain.handle('codex:login', async () => {
+  // 새 동작: codex login 의 stdout 직접 캡쳐 → OAuth URL 추출 → shell.openExternal 으로 browser 자동 열기.
+  // 기존 외부 터미널 spawn 만 으로는 browser auto-open 실패 시 사용자 가 URL 못 봄 (사용자 PC 환경 따라 다름).
+  // 추가 보장: 5 초 안에 URL capture 못 하면 fallback 으로 외부 터미널 (사용자 가 그 창 에서 URL 확인 가능).
   try {
-    if (process.platform === 'win32') {
-      const child = nodeSpawn('cmd.exe', ['/c', 'start', '', 'cmd.exe', '/k', 'codex login'], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: false,
-      })
-      child.unref()
-      return { success: true, mode: 'external_terminal' }
+    const oauthUrlRegex = /https:\/\/auth\.openai\.com\/oauth\/authorize\?[^\s]+/i
+    let urlOpened = false
+    let urlBuffer = ''
+
+    // background spawn — stdio pipe 으로 stdout 캡쳐
+    const child = nodeSpawn('codex', ['login'], {
+      shell: true,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+
+    const onData = (chunk: Buffer) => {
+      const text = chunk.toString('utf-8')
+      urlBuffer += text
+      const m = urlBuffer.match(oauthUrlRegex)
+      if (m && !urlOpened) {
+        urlOpened = true
+        const url = m[0]
+        shell.openExternal(url).catch(() => { /* ignore — fallback below */ })
+      }
     }
-    const cmd = process.platform === 'darwin'
-      ? ['osascript', ['-e', 'tell app "Terminal" to do script "codex login"']]
-      : ['x-terminal-emulator', ['-e', 'codex login']]
-    const child = nodeSpawn(cmd[0] as string, cmd[1] as string[], { detached: true, stdio: 'ignore' })
+    child.stdout?.on('data', onData)
+    child.stderr?.on('data', onData)
+    child.on('error', () => { /* fallback handled by timeout */ })
     child.unref()
-    return { success: true, mode: 'external_terminal' }
+
+    // 5 초 wait — URL capture 못 하면 외부 터미널 fallback (사용자 가 URL 직접 확인)
+    return await new Promise<{ success: boolean; mode: string; error?: string }>((resolve) => {
+      const timer = setTimeout(() => {
+        if (urlOpened) {
+          resolve({ success: true, mode: 'browser_auto_opened' })
+          return
+        }
+        // fallback — 외부 터미널 으로 spawn (기존 동작) + 사용자 가 cmd 창 에서 URL 직접 확인
+        try {
+          if (process.platform === 'win32') {
+            const fallback = nodeSpawn('cmd.exe', ['/c', 'start', '', 'cmd.exe', '/k', 'codex login'], {
+              detached: true, stdio: 'ignore', windowsHide: false,
+            })
+            fallback.unref()
+          } else {
+            const cmd = process.platform === 'darwin'
+              ? ['osascript', ['-e', 'tell app "Terminal" to do script "codex login"']]
+              : ['x-terminal-emulator', ['-e', 'codex login']]
+            const fallback = nodeSpawn(cmd[0] as string, cmd[1] as string[], { detached: true, stdio: 'ignore' })
+            fallback.unref()
+          }
+          resolve({ success: true, mode: 'external_terminal_fallback' })
+        } catch (err: any) {
+          resolve({ success: false, mode: 'failed', error: err?.message || String(err) })
+        }
+      }, 5_000)
+
+      // URL 캡쳐 즉시 resolve (timer 도 cleanup)
+      const checkInterval = setInterval(() => {
+        if (urlOpened) {
+          clearInterval(checkInterval)
+          clearTimeout(timer)
+          resolve({ success: true, mode: 'browser_auto_opened' })
+        }
+      }, 200)
+    })
   } catch (err: any) {
-    return { success: false, error: err?.message || String(err) }
+    return { success: false, mode: 'failed', error: err?.message || String(err) }
   }
 })
 
@@ -2269,12 +2311,6 @@ ipcMain.handle('hwp:getCompatibilityStatus', () => {
 
 
 ipcMain.handle('python:call', async (_, method: string, params: any) => {
-
-  // B3: python:call 은 만능 게이트 — 모든 Python 메서드가 여기로 라우팅됨.
-  // 라이센스 차단 상태에서 임의 Python 함수가 호출되지 않도록 가드.
-  try { assertLicenseOk('python:call') } catch (e: any) {
-    return { success: false, error: e?.message || 'LICENSE_BLOCKED' }
-  }
 
   if (!pythonBridge || !pythonBridge.isRunning()) {
 
@@ -3469,8 +3505,6 @@ ipcMain.handle('chat:send', async (
 
 
   try {
-    // B3: 라이센스 게이트 — main 측 1차 가드. 만료/회수 시 Python 호출조차 안 함.
-    assertLicenseOk('chat:send')
     console.log('[Main] chat:send handler started, prompt:', prompt?.substring(0, 50))
 
     // Python Bridge (COM Process) 시작
@@ -5924,38 +5958,6 @@ ipcMain.handle('edit:redo', async (_, count?: number) => {
 
 
 
-// Tally 도메인 storage 강제 클리어 — partial draft 잔존 방지.
-// origin filter (https://tally.so) 가 subdomain 못 잡아서 모든 tally.so / *.tally.so 쿠키 명시 제거.
-// + 전체 storage 중 cookies/cachestorage 만 (사용자 localStorage 보존).
-ipcMain.handle('tally:clearStorage', async () => {
-  try {
-    if (win && !win.isDestroyed()) {
-      const ses = win.webContents.session
-      // 1. Tally 도메인 쿠키 모두 제거 (*.tally.so 포함)
-      const cookies = await ses.cookies.get({ domain: 'tally.so' })
-      for (const c of cookies) {
-        const url = `${c.secure ? 'https' : 'http'}://${c.domain?.startsWith('.') ? c.domain.slice(1) : c.domain}${c.path}`
-        try { await ses.cookies.remove(url, c.name) } catch {}
-      }
-      // 2. Tally 도메인 storage — origin 별로 명시 (subdomain 포함 모든 시도)
-      const origins = ['https://tally.so', 'https://app.tally.so', 'https://embed.tally.so', 'https://forms.tally.so']
-      for (const origin of origins) {
-        try {
-          await ses.clearStorageData({
-            origin,
-            storages: ['localstorage', 'indexdb', 'cachestorage', 'serviceworkers'],
-          })
-        } catch {}
-      }
-      // 3. Tally HTTP cache
-      try { await ses.clearCache() } catch {}
-    }
-    return { ok: true }
-  } catch (e: any) {
-    return { ok: false, error: e?.message }
-  }
-})
-
 // Diff 모드 설정
 
 
@@ -6474,8 +6476,6 @@ ipcMain.handle('trackChanges:applyAll', async () => {
 
   try {
 
-    assertLicenseOk('trackChanges:applyAll')
-
     if (!pythonBridge || !pythonBridge.isRunning()) {
 
 
@@ -6533,10 +6533,6 @@ ipcMain.handle('trackChanges:applyAll', async () => {
 
 
 ipcMain.handle('trackChanges:rejectAll', async (_, params?: { docKey?: string; chatId?: string }) => {
-
-  try { assertLicenseOk('trackChanges:rejectAll') } catch (e: any) {
-    return { success: false, error: e?.message || 'LICENSE_BLOCKED' }
-  }
 
   const docKey = params?.docKey
 
@@ -6862,8 +6858,6 @@ ipcMain.handle('trackChanges:applySelected', async () => {
 
   try {
 
-    assertLicenseOk('trackChanges:applySelected')
-
     if (!pythonBridge || !pythonBridge.isRunning()) {
 
 
@@ -6929,10 +6923,6 @@ ipcMain.handle('trackChanges:applySelected', async () => {
 
 
 ipcMain.handle('trackChanges:rejectSelected', async (_, params?: { docKey?: string; chatId?: string }) => {
-
-  try { assertLicenseOk('trackChanges:rejectSelected') } catch (e: any) {
-    return { success: false, error: e?.message || 'LICENSE_BLOCKED' }
-  }
 
   const docKey = params?.docKey
 
@@ -7348,7 +7338,7 @@ function generateRejectReason(result: any, type: 'all' | 'partial'): string {
 
 
 
-// 베타 진단 데이터 동의 (verify-loop) — COM 프로세스로 전달하여 consent_record emit
+// 진단 데이터 동의 (verify-loop) — COM 프로세스로 전달하여 consent_record emit
 ipcMain.handle('consent:set', async (_, { consented }: { consented: boolean }) => {
   return pythonBridge ? pythonBridge.call('consent:set', { consented }) : { ok: false }
 })
@@ -7383,8 +7373,6 @@ ipcMain.handle('cvd:extractPair', async (_, args: {
 
 
   try {
-
-    assertLicenseOk('cvd:extractPair')
 
     if (!pythonBridge || !pythonBridge.isRunning()) {
 
@@ -7564,8 +7552,6 @@ ipcMain.handle('cvd:generateDiff', async (_, args: {
 
   try {
 
-    assertLicenseOk('cvd:generateDiff')
-
     if (!pythonBridge || !pythonBridge.isRunning()) {
 
       await startPythonProcess()
@@ -7676,8 +7662,6 @@ ipcMain.handle('cvd:processTemplatePair', async (_, args: {
 
 
   try {
-
-    assertLicenseOk('cvd:processTemplatePair')
 
     if (!pythonBridge || !pythonBridge.isRunning()) {
 
@@ -7906,9 +7890,6 @@ ipcMain.handle('fileSearch:indexPair', async (_, args: {
 
 }) => {
 
-  try { assertLicenseOk('fileSearch:indexPair') } catch (e: any) {
-    return { success: false, error: e?.message || 'LICENSE_BLOCKED' }
-  }
 
   if (!pythonBridge || !pythonBridge.isRunning()) {
 
@@ -8067,9 +8048,6 @@ ipcMain.handle('fileSearch:indexFile', async (_, args: {
 
 }) => {
 
-  try { assertLicenseOk('fileSearch:indexFile') } catch (e: any) {
-    return { success: false, error: e?.message || 'LICENSE_BLOCKED' }
-  }
 
   if (!pythonBridge || !pythonBridge.isRunning()) {
 
@@ -8202,9 +8180,6 @@ ipcMain.handle('fileSearch:deletePair', async (_, args: {
 
 }) => {
 
-  try { assertLicenseOk('fileSearch:deletePair') } catch (e: any) {
-    return { success: false, error: e?.message || 'LICENSE_BLOCKED' }
-  }
 
   if (!pythonBridge || !pythonBridge.isRunning()) {
 
@@ -8329,9 +8304,6 @@ ipcMain.handle('fileSearch:deleteFile', async (_, args: {
 
 }) => {
 
-  try { assertLicenseOk('fileSearch:deleteFile') } catch (e: any) {
-    return { success: false, error: e?.message || 'LICENSE_BLOCKED' }
-  }
 
   if (!pythonBridge || !pythonBridge.isRunning()) {
 
@@ -8486,9 +8458,6 @@ ipcMain.handle('fileSearch:indexChatFile', async (_, args: {
 
 }) => {
 
-  try { assertLicenseOk('fileSearch:indexChatFile') } catch (e: any) {
-    return { success: false, error: e?.message || 'LICENSE_BLOCKED' }
-  }
 
   if (!pythonBridge || !pythonBridge.isRunning()) {
 
@@ -8621,9 +8590,6 @@ ipcMain.handle('fileSearch:deleteChatScope', async (_, args: {
 
 }) => {
 
-  try { assertLicenseOk('fileSearch:deleteChatScope') } catch (e: any) {
-    return { success: false, error: e?.message || 'LICENSE_BLOCKED' }
-  }
 
   if (!pythonBridge || !pythonBridge.isRunning()) {
 

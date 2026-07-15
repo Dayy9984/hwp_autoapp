@@ -1,6 +1,6 @@
 import { rmSync } from 'node:fs'
 import path from 'node:path'
-import { defineConfig, loadEnv } from 'vite'
+import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import electron from 'vite-plugin-electron/simple'
 import commonjs from '@rollup/plugin-commonjs'
@@ -45,23 +45,14 @@ const electronEsmFix = {
   }
 }
 
-export default defineConfig(({ command, mode }) => {
+export default defineConfig(({ command }) => {
   rmSync('dist-electron', { recursive: true, force: true })
 
   const isServe = command === 'serve'
   const isBuild = command === 'build'
   const sourcemap = isServe || !!process.env.VSCODE_DEBUG
 
-  const env = loadEnv(mode, process.cwd(), '')
-
-  const mainEnvDefine: Record<string, string> = {
-    'process.env.UPDATE_FEED_URL': JSON.stringify(env.UPDATE_FEED_URL ?? ''),
-    'process.env.INSERTYAI_SUPABASE_ANON_KEY': JSON.stringify(env.INSERTYAI_SUPABASE_ANON_KEY ?? ''),
-    // ★ INSERTYAI_UPDATE_TOKEN inject 영구 제거 (보안). auto-update 는 Worker proxy 사용.
-    // Worker: inserty-beta-admin/worker/src/auto-update.ts
-    // Client config: electron/services/auto-update-service.ts (UPDATE_FEED_URL 상수)
-    //                + electron-builder.json (publish.url)
-  }
+  const mainEnvDefine: Record<string, string> = {}
 
   return {
     resolve: {
@@ -137,7 +128,6 @@ export default defineConfig(({ command, mode }) => {
               rollupOptions: {
                 external: [
                   'electron',
-                  'electron-updater',
                   ...Object.keys('dependencies' in pkg ? pkg.dependencies : {})
                 ],
                 output: {

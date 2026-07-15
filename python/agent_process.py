@@ -56,18 +56,6 @@ class AgentProcess:
         self.current_stream_id: Optional[int] = None
         self._stdout_lock = threading.Lock()
 
-        # 베타 trace: env 에서 license_token + device_id 읽어 등록
-        try:
-            import os as _os_beta
-            from services.beta_trace import set_credentials
-            token = _os_beta.environ.get("INSERTYAI_LICENSE_TOKEN", "")
-            device_id = _os_beta.environ.get("INSERTYAI_DEVICE_ID", "")
-            if token:
-                set_credentials(token, device_id)
-                print(f"[AgentProcess] beta_trace creds registered (device={device_id[:8]}...)", file=sys.stderr)
-        except Exception as _e:
-            print(f"[AgentProcess] beta_trace creds failed: {_e}", file=sys.stderr)
-
         # 시작 로그
         print("[AgentProcess] Initialized", file=sys.stderr)
 
@@ -87,18 +75,6 @@ class AgentProcess:
         try:
             if method == "ping":
                 return {"id": request_id, "result": {"pong": True}}
-
-            elif method == "beta:set_creds":
-                # Electron 이 라이센스 verify 토큰 + device_id 등록 / 갱신
-                try:
-                    from services.beta_trace import set_credentials
-                    result = set_credentials(
-                        params.get("token", ""),
-                        params.get("device_id", ""),
-                    )
-                    return {"id": request_id, "result": result}
-                except Exception as e:
-                    return {"id": request_id, "result": {"ok": False, "error": str(e)}}
 
             elif method == "stream_llm":
                 # LLM 스트리밍 호출 (Delta 전송) - 비동기 처리로 cancel 요청을 받을 수 있게 함
@@ -205,31 +181,6 @@ class AgentProcess:
         if not html or not prompt:
             raise ValueError("html and prompt are required")
 
-        # 라이센스 검증 — 서버 발급 JWT 의 exp 검사 (Layer 3 defense in depth).
-        # Frontend gate / IPC handler 가 우회되어도 여기서 차단. Nuitka 빌드 후 우회 매우 어려움.
-        # 토큰은 set_credentials() 통해 module-level _LICENSE_TOKEN 에 저장됨 (beta_trace.py).
-        try:
-            from services.beta_trace import _LICENSE_TOKEN as _lt  # type: ignore
-            import services.beta_trace as _bt  # 매 호출 시 최신 값 read
-            token = _bt._LICENSE_TOKEN or ""
-            if not token:
-                raise ValueError("LICENSE_REQUIRED")
-            # JWT payload 의 exp 만료 검사 (서명은 Supabase 가 발급 시점에 검증)
-            import base64 as _b64, json as _json, time as _time
-            try:
-                payload_b64 = token.split(".")[1]
-                padded = payload_b64 + "=" * ((4 - len(payload_b64) % 4) % 4)
-                payload = _json.loads(_b64.urlsafe_b64decode(padded))
-                exp = int(payload.get("exp", 0))
-                if exp and exp < int(_time.time()):
-                    raise ValueError("LICENSE_EXPIRED")
-            except (ValueError, IndexError, KeyError) as e:
-                if str(e) in ("LICENSE_EXPIRED", "LICENSE_REQUIRED"):
-                    raise
-                raise ValueError("LICENSE_INVALID")
-        except ImportError:
-            raise ValueError("LICENSE_REQUIRED")
-
         # v7.2: RAG 컨텍스트 설정 (OpenAI file_search 기반)
         if enable_rag:
             file_search_model = rag_context.get("file_search_model")
@@ -301,28 +252,6 @@ class AgentProcess:
                     messages_collected.append(text)
             else:
                 commands_count += 1
-                # 베타 trace: LLM 생성 명령 D1 기록 (applied=0 = 생성만, 적용 전)
-                try:
-                    from services.beta_trace import HwpTraceSession, _LICENSE_TOKEN, _DEVICE_ID
-                    if _LICENSE_TOKEN:
-                        # agent process 는 별도 process 라 hwp_com_process 의 session 과 분리
-                        # request_id 를 session_id 로 재사용 (LLM 호출 단위 추적)
-                        s = HwpTraceSession(_LICENSE_TOKEN, _DEVICE_ID, "", None)
-                        s.session_id = f"agent-{request_id}"
-                        s.block_cmd(
-                            command=str(cmd.action or "unknown"),
-                            target_id=str(cmd.id) if cmd.id is not None else None,
-                            args={
-                                "content_len": len(str(cmd.content or "")),
-                                "message_len": len(str(cmd.message or "")),
-                                "rows_count": len(cmd.rows) if cmd.rows else 0,
-                                **{k: v for k, v in metadata.items() if isinstance(v, (str, int, float, bool, type(None)))},
-                            },
-                            applied=0,
-                        )
-                        s.flush()
-                except Exception:
-                    pass
 
         def on_rag_search_callback(stage: str, message: str):
             """RAG 검색 상태 변경 시 호출 - Progress 이벤트 전송 (v7.2)

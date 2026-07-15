@@ -8,14 +8,13 @@ import { ChatSearchModal } from './components/modals/ChatSearchModal'
 import { CreateFolderModal } from './components/modals/CreateFolderModal'
 import { AddFolderFileModal } from './components/modals/AddFolderFileModal'
 import { SettingsModal } from './components/modals/SettingsModal'
-import { BetaFeedbackModal } from './components/BetaFeedbackToast'
+import { CodexSetupModal } from './components/modals/CodexSetupModal'
 import { CodexAuthBanner } from './components/CodexAuthBanner'
-import { IS_BETA, BETA_CODEX_ONLY } from './config/beta'
+import { CODEX_ONLY_MODE } from './config/release'
 import { NotificationModal, Notification } from './components/modals/NotificationModal'
 import { SignatureToolModal } from './components/modals/SignatureToolModal'
 import { ToolEditModal } from './components/modals/ToolEditModal'
 import { PromptCustomModal } from './components/modals/PromptCustomModal'
-import { PromptFullOverrideModal } from './components/modals/PromptFullOverrideModal'
 import { ChatOptionsPopover, FolderMovePopover, FolderOptionsPopover } from './components/popovers'
 import { ProfilePopover } from './components/popovers/ProfilePopover'
 import { SignatureOptionsPopover } from './components/popovers/SignatureOptionsPopover'
@@ -33,14 +32,6 @@ import { useAuthStore } from './stores/auth-store'
 import { useToolStore } from './stores/tool-store'
 import { getProjectChatOrder, loadChatOrderSettings } from './utils/chat-order-storage'
 import './dev-utils/test-data' // Import dev utilities for browser console access
-import { LicenseGate, LicenseState } from './components/LicenseGate'
-import { UpdateProgressModal } from './components/modals/UpdateProgressModal'
-
-// 진행률 전용 창인지 판별 (main process 가 hash=#update-progress 로 띄움).
-function isUpdateProgressRoute(): boolean {
-  if (typeof window === 'undefined') return false
-  return window.location.hash === '#update-progress'
-}
 
 // 알림 우선순위 (높을수록 중요 - 낮은 우선순위 알림이 높은 우선순위를 덮어쓸 수 없음)
 const NOTIFICATION_PRIORITY: Record<string, number> = {
@@ -48,38 +39,22 @@ const NOTIFICATION_PRIORITY: Record<string, number> = {
   'version-update': 80,
 }
 
-// bridge 응답 + 캐시 키를 LicenseGate state로 정규화 (license_key는 캐시에서 보충)
-function mapLicenseStatus(raw: any, cachedKey: string | null): LicenseState {
-  if (!raw) return { state: 'no_license' }
-  if (['expired', 'leaked', 'revoked', 'device_limit_reached'].includes(raw.state)) {
-    return { ...raw, license_key: cachedKey }
-  }
-  return raw
-}
-
-// 업데이트 진행률 전용 윈도우 렌더링 — main process 가 BrowserWindow 를 열 때
-// hash=#update-progress 로 indexHtml 을 로드. 이 경우 다른 UI 는 다 빼고 진행률만 보여줌.
-function UpdateProgressApp() {
-  // 진행률 모달이 자체적으로 downloaded 이벤트 받으면 자동 install 트리거.
-  return (
-    <UpdateProgressModal
-      open
-      onClose={() => { /* 사용자가 닫을 수 없음 — 자동 진행 */ }}
-    />
-  )
+/**
+ * Codex 자동 설정 wizard 의 store ↔ modal isOpen 연결 wrapper.
+ * 별도 컴포넌트 인 이유: useUIStore subscribe 의 re-render 범위 를 좁히기 위해.
+ */
+function CodexSetupModalContainer() {
+  const isOpen = useUIStore((s) => s.activeModal === 'codex-setup')
+  const closeModal = useUIStore((s) => s.closeModal)
+  return <CodexSetupModal isOpen={isOpen} onClose={closeModal} />
 }
 
 function App() {
-  // 업데이트 진행률 전용 창이면 메인 UI / 라이센스 / Python 전부 건너뜀.
-  if (isUpdateProgressRoute()) return <UpdateProgressApp />
-
-  const [licenseStatus, setLicenseStatus] = useState<LicenseState>({ state: 'loading' })
   const [showSplash, setShowSplash] = useState(true)
   const [pythonReady, setPythonReady] = useState(false)
   const [appStatus, setAppStatus] = useState<{ message: string; progress?: number } | null>(null)
   const [notification, setNotification] = useState<Notification | null>(null)
   const notificationPriorityRef = useRef(0)
-  const updateCheckRef = useRef(false)
   const initialCheckRef = useRef(false)
   const { isAuthenticated } = useAuthStore()
   const {
@@ -170,74 +145,6 @@ function App() {
     }
   }, [isAuthenticated, clearNavigationHistory])
 
-
-  // 자동 업데이트 상태 리스너
-  useEffect(() => {
-    if (!isAuthenticated) return
-
-    const api = typeof window !== 'undefined' ? window.electronAPI : undefined
-    if (!api?.update?.onStatus) return
-
-    const unsubscribe = api.update.onStatus((status) => {
-      console.log('[App] Update status:', status.status, status.info?.version ?? '', status.isCritical ? '(CRITICAL)' : '')
-
-      // 'available' 시점에 알림 표시. 클릭하면 startInstallFlow 가:
-      //   1) 메인 창 닫음
-      //   2) 별도 progress window 띄움
-      //   3) 다운로드 시작 → 진행률 표시 → 자동 설치 → 새 앱 실행
-      // 단일 흐름.
-      if (status.status === 'available' && status.info) {
-        const isCritical = status.isCritical ?? false
-        const releaseNotes = status.releaseNotes ?? ''
-        const title = isCritical ? '필수 업데이트' : '새 버전 사용 가능'
-        const content = isCritical
-          ? `중요한 업데이트가 있습니다.\n버전 ${status.info.version}(으)로 업데이트해야 합니다.${releaseNotes ? `\n\n${releaseNotes}` : ''}`
-          : `새 버전 ${status.info.version}이(가) 출시되었습니다.\n지금 업데이트하시겠습니까?${releaseNotes ? `\n\n${releaseNotes}` : ''}`
-        showNotification({
-          id: `update-available-${status.info.version}`,
-          type: isCritical ? 'critical-update' : 'version-update',
-          title,
-          content,
-          actionLabel: '업데이트',
-          isCritical,
-        })
-      }
-    })
-
-    // 리스너 등록 후, 놓친 이벤트가 있는지 확인 (앱 시작 시 renderer보다 먼저 발생한 이벤트 복구)
-    if (api.update?.getLastStatus) {
-      api.update.getLastStatus().then((result) => {
-        if (result?.success && result.status) {
-          console.log('[App] Recovering missed update status:', result.status.status)
-          // 이미 리스너로 처리된 상태가 아닌 경우에만 처리
-          if (result.status.status === 'available') {
-            const recoveredStatus = result.status
-            if (recoveredStatus.info) {
-              const isCritical = recoveredStatus.isCritical ?? false
-              const releaseNotes = recoveredStatus.releaseNotes ?? ''
-              const title = isCritical ? '필수 업데이트' : '새 버전 사용 가능'
-              const content = isCritical
-                ? `중요한 업데이트가 있습니다.\n버전 ${recoveredStatus.info.version}(으)로 업데이트해야 합니다.${releaseNotes ? `\n\n${releaseNotes}` : ''}`
-                : `새 버전 ${recoveredStatus.info.version}이(가) 출시되었습니다.\n지금 업데이트하시겠습니까?${releaseNotes ? `\n\n${releaseNotes}` : ''}`
-              showNotification({
-                id: `update-available-${recoveredStatus.info.version}`,
-                type: isCritical ? 'critical-update' : 'version-update',
-                title, content,
-                actionLabel: '업데이트',
-                isCritical,
-              })
-            }
-          }
-        }
-      }).catch(err => {
-        console.error('[App] Failed to get last update status:', err)
-      })
-    }
-
-    return () => {
-      unsubscribe()
-    }
-  }, [isAuthenticated, showNotification])
 
   // 프로젝트 로드 (앱 시작 시 DB에서 복원)
   useEffect(() => {
@@ -348,46 +255,6 @@ function App() {
   }, [isAuthenticated, restoreFolder])
 
 
-  // Update check (once after login / auto-login)
-  useEffect(() => {
-    if (!isAuthenticated) return
-    if (updateCheckRef.current) return
-    updateCheckRef.current = true
-
-    const checkUpdates = async () => {
-      const api = typeof window !== 'undefined' ? window.electronAPI : undefined
-      if (!api?.update?.check) return
-
-      try {
-        const settingsResult = await api.invoke('settings:getAll')
-        const settings = settingsResult?.data?.settings ?? {}
-        const now = Date.now()
-        const lastCheckAt = typeof settings.last_update_check_at === 'number'
-          ? settings.last_update_check_at
-          : 0
-        const minIntervalMs = 6 * 60 * 60 * 1000
-
-        if (now - lastCheckAt < minIntervalMs) {
-          return
-        }
-
-        void api.invoke('settings:set', {
-          key: 'last_update_check_at',
-          value: now,
-          type: 'number'
-        })
-
-        // 업데이트 체크 트리거 — 알림은 auto-update:status IPC 리스너가 단일 처리
-        // (별도 version-update-* 알림을 만들면 update-available-* 와 중복 팝업 발생)
-        await api.update.check()
-      } catch (error) {
-        console.error('[App] Update check failed:', error)
-      }
-    }
-
-    void checkUpdates()
-  }, [isAuthenticated])
-
   // OpenAI API 키 알림은 제거 — Codex 로그인 시에도 잘못 표시되는 문제,
   // 그리고 사용자 경험상 불필요한 시작 모달을 없앤다.
   // (채팅 전송 시점의 ensureOpenAiKey는 유지 — codex 모드는 자동 통과)
@@ -414,72 +281,6 @@ function App() {
       unsubscribeBound()
     }
   }, [isAuthenticated, clearDocumentState])
-
-  // 라이센스 게이트 — 앱 시작 시 초기 상태 가져오고 24h heartbeat 등록
-  // + main 의 license:statusChanged 이벤트 구독 (IPC 가드가 throw 한 경우,
-  //   verify 가 새 상태 받은 경우 등 ok→차단 전이를 즉시 UI 에 반영).
-  useEffect(() => {
-    const api = (window as any).electronAPI?.license
-    if (!api) return
-    let cancelled = false
-    const sync = async () => {
-      const raw = await api.getInitialStatus()
-      const cachedKey = await api.getCachedKey()
-      if (!cancelled) setLicenseStatus(mapLicenseStatus(raw, cachedKey))
-    }
-    sync()
-    const interval = setInterval(async () => {
-      const raw = await api.verify()
-      const cachedKey = await api.getCachedKey()
-      if (!cancelled) setLicenseStatus(mapLicenseStatus(raw, cachedKey))
-    }, 24 * 3600 * 1000)
-
-    // main 측 lastStatus 가 갱신될 때마다 push — verify / activate / 가드 throw 후 등.
-    let unsubscribe: (() => void) | undefined
-    if (typeof api.onStatusChanged === 'function') {
-      unsubscribe = api.onStatusChanged(async (raw: any) => {
-        if (cancelled) return
-        const cachedKey = await api.getCachedKey()
-        setLicenseStatus(mapLicenseStatus(raw, cachedKey))
-      })
-    }
-    return () => {
-      cancelled = true
-      clearInterval(interval)
-      try { unsubscribe?.() } catch {}
-    }
-  }, [])
-
-  const handleLicenseActivate = useCallback(async (key: string) => {
-    const api = (window as any).electronAPI?.license
-    if (!api) return
-    const raw = await api.activate(key)
-    const cachedKey = await api.getCachedKey()
-    // 신규 expired/leaked/revoked 활성화 시도는 cache 가 없어 license_key 가 안 보임.
-    // 사용자가 카카오 문의 시 "내가 입력한 키" 를 알 수 있도록 입력 키를 fallback.
-    const displayKey = cachedKey || key.trim().toUpperCase()
-    setLicenseStatus(mapLicenseStatus(raw, displayKey))
-  }, [])
-
-  const handleLicenseRetry = useCallback(async () => {
-    const api = (window as any).electronAPI?.license
-    if (!api) return
-    const raw = await api.verify()
-    const cachedKey = await api.getCachedKey()
-    setLicenseStatus(mapLicenseStatus(raw, cachedKey))
-  }, [])
-
-  // 라이센스가 ok 또는 offline_grace가 아니면 차단 화면 표시
-  const licenseOk = licenseStatus.state === 'ok' || licenseStatus.state === 'offline_grace'
-  if (!licenseOk) {
-    return (
-      <LicenseGate
-        status={licenseStatus}
-        onActivate={handleLicenseActivate}
-        onRetry={handleLicenseRetry}
-      />
-    )
-  }
 
   // Show splash screen on app start
   if (showSplash) {
@@ -525,8 +326,9 @@ function App() {
         <CreateFolderModal />
         <AddFolderFileModal />
         <SettingsModal />
-        {IS_BETA && <BetaFeedbackModal />}
-        {IS_BETA && <CodexAuthBanner />}
+        {/* Codex 자동 설정 wizard — banner 의 "설치 하기" / "로그인" 버튼 으로 열림. */}
+        <CodexSetupModalContainer />
+        {CODEX_ONLY_MODE && <CodexAuthBanner />}
         <NotificationModal
           notification={notification}
           onClose={clearNotification}
@@ -544,20 +346,6 @@ function App() {
             const api = typeof window !== 'undefined' ? window.electronAPI : undefined
             if (!api) return
 
-            // 업데이트 알림 → 메인 창 닫고 별도 progress 창 열기 + 다운로드 시작.
-            // downloaded 이벤트 시 progress 창이 자동으로 install 트리거 → 추가 클릭 없이 완료.
-            if (item.id.startsWith('update-available-') || item.id.startsWith('version-update-')) {
-              const startFlow = (api.update as any)?.startInstallFlow
-              if (typeof startFlow === 'function') {
-                const r = await startFlow()
-                if (!r?.success) console.error('[App] startInstallFlow failed:', r?.error)
-              } else if (api.update?.download) {
-                // 폴백 — 구 빌드 호환
-                await api.update.download()
-              }
-              return
-            }
-
             // 외부 URL이 있는 알림 (공지사항 등)
             if (item.actionUrl) {
               window.open(item.actionUrl, '_blank', 'noopener,noreferrer')
@@ -567,7 +355,6 @@ function App() {
         <SignatureToolModal />
         <ToolEditModal />
         <PromptCustomModal />
-        <PromptFullOverrideModal />
 
         {/* 팝오버들 */}
         <ChatOptionsPopover />

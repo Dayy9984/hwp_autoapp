@@ -55,8 +55,6 @@ python/build/
 python/dist/
 
 # Build artifacts
-python/dist_obfuscated/
-python/dist_ultra/
 release_old_*/
 tsconfig.node.tsbuildinfo
 vite.config.js
@@ -99,3 +97,6 @@ python/pyarmor.bug.log
 python/build_output.log
 python/nuitka-crash-report.xml
 eval-results/
+
+# Playwright MCP browser snapshots (scratch)
+.playwright-mcp/
